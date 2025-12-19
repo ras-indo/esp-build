@@ -27,7 +27,7 @@ jobs:
       uses: espressif/esp-idf-ci-action@v1
       with:
         esp_idf_version: 'v5.1'    # Sesuaikan versi IDF Anda
-        target: 'esp32'            # Ganti dengan target chip
+        target: 'esp32c3'            # Ganti dengan target chip
         path: '.'                  # Jika proyek di root
         # command: idf.py build    # Default, tidak perlu ditulis
         
