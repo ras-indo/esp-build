@@ -1,0 +1,71 @@
+name: Build and Public Auto-Release
+
+on:
+  # Pilih salah satu trigger yang sesuai:
+  
+  # OPSI A: Setiap push ke branch main (rekomendasi)
+  push:
+    branches: [ main, master ]
+  
+  # workflow_dispatch:
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    
+    # PERMISSION KRITIS: Diperlukan untuk membuat/mengubah rilis
+    permissions:
+      contents: write
+    
+    steps:
+    - name: Checkout kode + submodul
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive  # PENTING jika pakai submodul
+        
+    - name: Setup ESP-IDF dan Build
+      uses: espressif/esp-idf-ci-action@v1
+      with:
+        esp_idf_version: 'v5.1'    # Sesuaikan versi IDF Anda
+        target: 'esp32'            # Ganti dengan target chip
+        path: '.'                  # Jika proyek di root
+        # command: idf.py build    # Default, tidak perlu ditulis
+        
+    - name: Buat ZIP seluruh folder build
+      id: zip-build
+      run: |
+        cd build
+        # Buat nama file dengan timestamp (opsional)
+        TIMESTAMP=$(date +'%Y%m%d-%H%M%S')
+        ZIP_NAME="firmware-build-$TIMESTAMP.zip"
+        zip -r ../$ZIP_NAME .
+        echo "zip_name=$ZIP_NAME" >> $GITHUB_OUTPUT
+        
+    - name: Buat/Update Rilis Publik
+      uses: softprops/action-gh-release@v1
+      with:
+        # STRATEGI TAG TETAP: Rilis selalu diupdate di tag yang sama
+        tag_name: 'latest'           # Tag tetap yang selalu diupdate
+        name: 'Build Terbaru'        # Judul rilis
+        body: |
+          Build otomatis terbaru dari branch ${{ github.ref_name }}
+          Commit: ${{ github.sha }}
+          Dibuat pada: ${{ github.event.head_commit.timestamp }}
+          
+          Download file ZIP berisi seluruh folder build.
+        draft: false                 # Langsung publik
+        prerelease: true            # Tandai sebagai pre-release
+        generate_release_notes: true # GitHub buat catatan rilis otomatis
+        
+        # KRITIS: Timpa rilis lama dengan yang baru
+        replace: true
+        
+        # KRITIS: Hapus aset lama sebelum upload baru
+        remove_assets: true
+        
+        # Upload file ZIP yang dibuat
+        files: ${{ steps.zip-build.outputs.zip_name }}
+        
+      env:
+        # Token otomatis dari GitHub
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
