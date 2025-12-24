@@ -1,4 +1,4 @@
-name: Build ESP-IDF Toolchains (ARM64 Host) - MANUAL DOWNLOAD FIX
+name: Build ESP-IDF Toolchains (ARM64 Host) - FIXED FINAL
 
 on:
   push:
@@ -74,44 +74,51 @@ jobs:
           mkdir -p $WORKSPACE/.build/tarballs
           echo "CT_LOCAL_TARBALLS_DIR=$WORKSPACE/.build/tarballs" >> $GITHUB_ENV
 
-      - name: Download Manual Library (ANTI GAGAL)
+      - name: Download Manual Library (LINK ALTERNATIF)
         run: |
           echo "=== DOWNLOAD MANUAL DEPENDENCIES ==="
-          # Kita download file yang gagal (ISL) dan taruh di folder yang benar.
-          # CT-NG akan mendeteksi file ini dan skip proses download internalnya.
-          
           cd $CT_LOCAL_TARBALLS_DIR
           
-          # 1. ISL 0.19 (Penyebab Utama Error)
-          # Menggunakan mirror GNU GCC yang sangat stabil
+          # 1. ISL 0.19 (CRITICAL FIX)
+          # Link GCC mati (404), kita ganti ke mirror EasyBuild yang stabil untuk file lama
           echo "Downloading isl-0.19.tar.bz2..."
-          wget --tries=5 --waitretry=5 -O isl-0.19.tar.bz2 https://gcc.gnu.org/pub/gcc/infrastructure/isl-0.19.tar.bz2
+          wget --tries=5 --waitretry=5 -O isl-0.19.tar.bz2 https://sources.easybuild.io/i/ISL/isl-0.19.tar.bz2
           
-          # 2. GMP 6.2.0 (Sesuai Log)
+          # 2. GMP 6.2.0
           if [ ! -f "gmp-6.2.0.tar.xz" ]; then
              echo "Downloading gmp-6.2.0.tar.xz..."
              wget --tries=5 -O gmp-6.2.0.tar.xz https://ftp.gnu.org/gnu/gmp/gmp-6.2.0.tar.xz
           fi
           
-          # 3. MPFR 4.0.2 (Sesuai Log)
+          # 3. MPFR 4.0.2
           if [ ! -f "mpfr-4.0.2.tar.xz" ]; then
              echo "Downloading mpfr-4.0.2.tar.xz..."
              wget --tries=5 -O mpfr-4.0.2.tar.xz https://ftp.gnu.org/gnu/mpfr/mpfr-4.0.2.tar.xz
           fi
           
-          # 4. MPC 1.1.0 (Estimasi, tapi aman didownload)
+          # 4. MPC 1.1.0
           if [ ! -f "mpc-1.1.0.tar.gz" ]; then
              echo "Downloading mpc-1.1.0.tar.gz..."
              wget --tries=5 -O mpc-1.1.0.tar.gz https://ftp.gnu.org/gnu/mpc/mpc-1.1.0.tar.gz
           fi
 
-          echo "=== Cek File Tarballs ==="
-          ls -la
-          # Pastikan ukurannya wajar (tidak 0 bytes)
-          if [ ! -s isl-0.19.tar.bz2 ]; then
-            echo "ERROR: Download ISL Gagal (File kosong)"
-            exit 1
+          echo "=== Cek Integritas File ==="
+          ls -lh
+          
+          # Pastikan file ISL benar-benar terdownload (bukan file html error)
+          if [ ! -s isl-0.19.tar.bz2 ] || [ $(stat -c%s "isl-0.19.tar.bz2") -lt 100000 ]; then
+            echo "FATAL ERROR: Download ISL gagal atau file corrupt!"
+            rm -f isl-0.19.tar.bz2
+            
+            echo "Mencoba Link Cadangan untuk ISL..."
+            wget --tries=5 -O isl-0.19.tar.bz2 https://libisl.sourceforge.io/isl-0.19.tar.bz2
+            
+            if [ ! -s isl-0.19.tar.bz2 ]; then
+               echo "FATAL: Semua link ISL gagal."
+               exit 1
+            fi
           fi
+          echo "Semua library berhasil didownload."
 
       - name: Konfigurasi Toolchain
         run: |
