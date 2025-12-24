@@ -1,4 +1,4 @@
-name: Build ESP-IDF Toolchains (ARM64 Host) - Fixed v2
+name: Build ESP-IDF Toolchains (ARM64 Host) - Fixed
 
 on:
   push:
@@ -116,21 +116,19 @@ jobs:
             cp samples/$TARGET/crosstool.config .config
           else
             echo "Membuat configuration manual"
-            # Create a minimal configuration
-            cat > .config << 'EOF'
-CT_OBSOLETE=y
-CT_EXPERIMENTAL=y
-CT_ALLOW_BUILD_AS_ROOT=y
-CT_ALLOW_BUILD_AS_ROOT_SURE=y
-CT_LOG_PROGRESS_BAR=n
-CT_KERNEL_LINUX=y
-CT_LIBC_NEWLIB=y
-CT_CC_LANG_CXX=y
-CT_DEBUG_GDB=y
-CT_CC_GCC=y
-CT_BINUTILS=y
-CT_GDB=y
-EOF
+            # Create a minimal configuration - FIXED: Use echo instead of heredoc
+            echo "CT_OBSOLETE=y" > .config
+            echo "CT_EXPERIMENTAL=y" >> .config
+            echo "CT_ALLOW_BUILD_AS_ROOT=y" >> .config
+            echo "CT_ALLOW_BUILD_AS_ROOT_SURE=y" >> .config
+            echo "CT_LOG_PROGRESS_BAR=n" >> .config
+            echo "CT_KERNEL_LINUX=y" >> .config
+            echo "CT_LIBC_NEWLIB=y" >> .config
+            echo "CT_CC_LANG_CXX=y" >> .config
+            echo "CT_DEBUG_GDB=y" >> .config
+            echo "CT_CC_GCC=y" >> .config
+            echo "CT_BINUTILS=y" >> .config
+            echo "CT_GDB=y" >> .config
           fi
           
           # Set target
