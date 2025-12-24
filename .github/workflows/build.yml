@@ -12,6 +12,7 @@ on:
       release:
         description: Release tag / name (example: v1.0.0)
         required: true
+        type: string
 
 permissions:
   contents: write
