@@ -1,7 +1,6 @@
 name: Build ESP-IDF Toolchains (ARM64 Host) - Auto
 
 on:
-  # PERUBAHAN 1: Ganti trigger menjadi otomatis pada push ke branch main[citation:2][citation:9]
   push:
     branches:
       - 'main'
@@ -11,7 +10,6 @@ permissions:
   contents: write
 
 env:
-  # PERUBAHAN 2: Gunakan versi terbaru crosstool-NG (1.28.0)[citation:3]
   CROSSTOOL_NG_VERSION: '1.28.0'
   CT_HOST_TRIPLET: 'aarch64-unknown-linux-gnu'
   CT_PREFIX_DIR: '/github/workspace/x-tools'
@@ -38,7 +36,9 @@ jobs:
 
       - name: Verify runner architecture (ARM64)
         run: |
-          uname -m
+          echo "Architecture: $(uname -m)"
+          echo "Runner info:"
+          uname -a
 
       - name: Set environment
         run: |
@@ -47,7 +47,7 @@ jobs:
           echo "CT_HOST_TRIPLET=${{ env.CT_HOST_TRIPLET }}" >> $GITHUB_ENV
           echo "CROSSTOOL_NG_VERSION=${{ env.CROSSTOOL_NG_VERSION }}" >> $GITHUB_ENV
 
-      - name: Cache toolchains and ct-ng cache[citation:5]
+      - name: Cache toolchains and ct-ng cache
         id: cache
         uses: actions/cache@v4
         with:
@@ -70,10 +70,11 @@ jobs:
       - name: Download and extract crosstool-NG
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
-          # Download versi terbaru dari GitHub releases[citation:3]
+          # Download versi terbaru dari GitHub releases
           wget -q https://github.com/crosstool-ng/crosstool-ng/archive/refs/tags/crosstool-ng-${CROSSTOOL_NG_VERSION}.tar.gz
           tar xzf crosstool-ng-${CROSSTOOL_NG_VERSION}.tar.gz
           mv crosstool-ng-crosstool-ng-${CROSSTOOL_NG_VERSION} crosstool-ng
+          echo "Downloaded crosstool-NG version ${CROSSTOOL_NG_VERSION}"
 
       - name: Build and install crosstool-NG
         if: steps.cache.outputs.cache-hit != 'true'
@@ -83,6 +84,7 @@ jobs:
           ./configure --enable-local
           make -j$(nproc)
           sudo make install
+          echo "crosstool-NG installed successfully"
 
       - name: Prepare configuration for ${{ matrix.target }}
         if: steps.cache.outputs.cache-hit != 'true'
@@ -98,14 +100,12 @@ jobs:
             echo "Sample config tidak ditemukan untuk $TARGET"
             echo "Membuat konfigurasi dasar..."
             
-            # Untuk target ESP, konfigurasi dasar mungkin diperlukan
-            cat > .config << 'EOF'
-            CT_EXPERIMENTAL=y
-            CT_ALLOW_BUILD_AS_ROOT=y
-            CT_ALLOW_BUILD_AS_ROOT_SURE=y
-            CT_LOG_PROGRESS_BAR=n
-            CT_LOG_LEVEL_MAX=INFO
-            EOF
+            # PERBAIKAN: Gunakan echo bukan heredoc untuk menghindari parsing error YAML
+            echo "CT_EXPERIMENTAL=y" > .config
+            echo "CT_ALLOW_BUILD_AS_ROOT=y" >> .config
+            echo "CT_ALLOW_BUILD_AS_ROOT_SURE=y" >> .config
+            echo "CT_LOG_PROGRESS_BAR=n" >> .config
+            echo "CT_LOG_LEVEL_MAX=INFO" >> .config
           fi
           
           # Update konfigurasi dasar
@@ -116,8 +116,16 @@ jobs:
           echo "CT_LIBC_NEWLIB=y" >> .config
           echo "CT_CC_LANG_CXX=y" >> .config
           
+          # Hapus duplikasi dan simpan untuk debugging
+          sort -u .config -o .config
+          cp .config "$GITHUB_WORKSPACE/.config-$TARGET"
+          
           # Validasi konfigurasi
-          ./ct-ng show-config > /dev/null 2>&1 || echo "Config validation completed"
+          if ./ct-ng show-config > /dev/null 2>&1; then
+            echo "Config validation passed"
+          else
+            echo "Config validation completed"
+          fi
 
       - name: Build toolchain ${{ matrix.target }}
         if: steps.cache.outputs.cache-hit != 'true'
@@ -127,33 +135,101 @@ jobs:
           mkdir -p "${CT_PREFIX_DIR}"
           
           echo "Memulai build $TARGET..."
-          ./ct-ng build.$(nproc) 2>&1 | tee build.log || {
-            echo "Build gagal, cek log..."
-            tail -100 build.log
-            exit 1
+          
+          # Coba build dengan jumlah core yang tersedia
+          ./ct-ng build.$(nproc) 2>&1 | tee build-$TARGET.log || {
+            echo "Build gagal, cek log terakhir..."
+            tail -100 build-$TARGET.log
+            # Coba build dengan metode alternatif
+            echo "Mencoba metode build alternatif..."
+            ./ct-ng build 2>&1 | tee build-$TARGET-alt.log || {
+              echo "Build alternatif juga gagal"
+              exit 1
+            }
           }
+          
+          echo "Build $TARGET selesai"
 
       - name: Verify and package toolchain
+        id: package
         run: |
-          # Verifikasi
-          if [ -f "${CT_PREFIX_DIR}/${TARGET}/bin/${TARGET}-gcc" ]; then
+          # Verifikasi toolchain
+          TOOLCHAIN_BIN="${CT_PREFIX_DIR}/${TARGET}/bin/${TARGET}-gcc"
+          if [ -f "$TOOLCHAIN_BIN" ]; then
             echo "Toolchain $TARGET berhasil dibangun"
+            "$TOOLCHAIN_BIN" --version | head -1
           else
             echo "ERROR: Toolchain tidak ditemukan di lokasi yang diharapkan"
+            echo "Mencari di ${CT_PREFIX_DIR}..."
+            find "${CT_PREFIX_DIR}" -name "*gcc" -type f 2>/dev/null || true
             exit 1
           fi
           
-          # Package
+          # Package toolchain
           mkdir -p artifacts
           ASSET="${TARGET}-host-arm64.tar.gz"
-          tar -czf "artifacts/${ASSET}" -C "${CT_PREFIX_DIR}" "${TARGET}"
+          if [ -d "${CT_PREFIX_DIR}/${TARGET}" ]; then
+            tar -czf "artifacts/${ASSET}" -C "${CT_PREFIX_DIR}" "${TARGET}"
+          else
+            echo "ERROR: Direktori toolchain ${CT_PREFIX_DIR}/${TARGET} tidak ditemukan"
+            exit 1
+          fi
+          
+          # Generate checksum
           sha256sum "artifacts/${ASSET}" > "artifacts/${ASSET}.sha256"
           echo "asset_name=${ASSET}" >> $GITHUB_OUTPUT
+          echo "asset_path=artifacts/${ASSET}" >> $GITHUB_OUTPUT
+          
+          echo "Toolchain $TARGET telah dipackage: ${ASSET}"
 
-      - name: Upload artifact[citation:10]
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.package.outputs.asset_name }}
           path: |
             artifacts/
           retention-days: 30
+
+  summary:
+    needs: compile
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          
+      - name: Generate build summary
+        run: |
+          echo "# Build Summary - ESP-IDF Toolchains" > summary.md
+          echo "" >> summary.md
+          echo "Build date: $(date)" >> summary.md
+          echo "" >> summary.md
+          echo "## Artifacts:" >> summary.md
+          echo "" >> summary.md
+          
+          if [ -d "artifacts" ]; then
+            find artifacts -name "*.tar.gz" -type f | sort | while read f; do
+              BASENAME=$(basename "$f")
+              echo "### ${BASENAME}" >> summary.md
+              echo "" >> summary.md
+              echo "SHA256: \`$(sha256sum "$f" | cut -d' ' -f1)\`" >> summary.md
+              echo "" >> summary.md
+            done
+          else
+            echo "No artifacts found" >> summary.md
+          fi
+          
+          echo "## Build Status:" >> summary.md
+          echo "" >> summary.md
+          echo '```' >> summary.md
+          echo "Matrix targets:" >> summary.md
+          echo "- xtensa-esp32-elf" >> summary.md
+          echo "- xtensa-esp32s2-elf" >> summary.md
+          echo "- xtensa-esp32s3-elf" >> summary.md
+          echo "- xtensa-lx106-elf" >> summary.md
+          echo "- riscv32-esp-elf" >> summary.md
+          echo '```' >> summary.md
+          
+          cat summary.md
