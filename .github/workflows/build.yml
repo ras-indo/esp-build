@@ -1,4 +1,4 @@
-name: Build ESP-IDF Toolchains (ARM64 Host) - Fixed
+name: Build ESP-IDF Toolchains (ARM64 Host) - Final
 
 on:
   push:
@@ -53,7 +53,7 @@ jobs:
             git wget unzip pkg-config ca-certificates gperf ninja-build cmake \
             file bzip2 xz-utils lzip gzip curl rsync \
             libgmp-dev libmpfr-dev libmpc-dev libexpat1-dev zlib1g-dev \
-            g++ gcc make patch
+            g++ gcc make patch gettext
           sudo ln -sf /usr/bin/python3 /usr/bin/python || true
 
       - name: Download crosstool-NG fork
@@ -97,6 +97,7 @@ jobs:
           wget -q --tries=3 --timeout=60 -c https://ftp.gnu.org/gnu/mpc/mpc-1.2.1.tar.gz || echo "Failed mpc"
           wget -q --tries=3 --timeout=60 -c https://ftp.gnu.org/gnu/binutils/binutils-2.36.1.tar.xz || echo "Failed binutils"
           wget -q --tries=3 --timeout=60 -c https://ftp.gnu.org/gnu/gcc/gcc-8.4.0/gcc-8.4.0.tar.xz || echo "Failed gcc"
+          wget -q --tries=3 --timeout=60 -c https://sourceware.org/pub/newlib/newlib-3.3.0.tar.gz || echo "Failed newlib"
           
           echo "Tarballs tersedia:"
           ls -la *.tar.* 2>/dev/null | wc -l
@@ -115,20 +116,30 @@ jobs:
             echo "Menggunakan sample configuration"
             cp samples/$TARGET/crosstool.config .config
           else
-            echo "Membuat configuration manual"
-            # Create a minimal configuration
+            echo "Membuat configuration manual untuk bare-metal ESP32"
+            # Create a minimal configuration for bare-metal toolchain
             echo "CT_OBSOLETE=y" > .config
             echo "CT_EXPERIMENTAL=y" >> .config
             echo "CT_ALLOW_BUILD_AS_ROOT=y" >> .config
             echo "CT_ALLOW_BUILD_AS_ROOT_SURE=y" >> .config
             echo "CT_LOG_PROGRESS_BAR=n" >> .config
-            echo "CT_KERNEL_LINUX=y" >> .config
+            
+            # CRITICAL: For ESP32, use bare-metal (no Linux kernel)
+            echo "CT_KERNEL_NONE=y" >> .config
+            echo "CT_KERNEL=\"none\"" >> .config
+            
             echo "CT_LIBC_NEWLIB=y" >> .config
             echo "CT_CC_LANG_CXX=y" >> .config
             echo "CT_DEBUG_GDB=y" >> .config
             echo "CT_CC_GCC=y" >> .config
             echo "CT_BINUTILS=y" >> .config
             echo "CT_GDB=y" >> .config
+            
+            # Use bundled patches
+            echo "CT_PATCH_BUNDLED=y" >> .config
+            echo "CT_PATCH_BUNDLED_LOCAL=n" >> .config
+            echo "CT_PATCH_LOCAL=n" >> .config
+            echo "CT_PATCH_NONE=n" >> .config
           fi
           
           # Set target
@@ -137,10 +148,23 @@ jobs:
           # Set architecture based on target
           if [[ "$TARGET" == "xtensa-"* ]]; then
             echo "CT_ARCH=\"xtensa\"" >> .config
-            echo "CT_ARCH_CPU=\"lx6\"" >> .config
+            echo "CT_ARCH_XTENSA=y" >> .config
+            echo "CT_ARCH_XTENSA_CPU=\"lx6\"" >> .config
             echo "CT_ARCH_XTENSA_CORE=\"custom\"" >> .config
+            
+            # For specific ESP32 variants
+            if [[ "$TARGET" == *"esp32"* ]]; then
+              echo "CT_ARCH_XTENSA_CORE=\"esp32\"" >> .config
+            fi
+            if [[ "$TARGET" == *"esp32s2"* ]]; then
+              echo "CT_ARCH_XTENSA_CORE=\"esp32s2\"" >> .config
+            fi
+            if [[ "$TARGET" == *"esp32s3"* ]]; then
+              echo "CT_ARCH_XTENSA_CORE=\"esp32s3\"" >> .config
+            fi
           elif [[ "$TARGET" == "riscv32-"* ]]; then
             echo "CT_ARCH=\"riscv\"" >> .config
+            echo "CT_ARCH_RISCV=y" >> .config
             echo "CT_ARCH_32=y" >> .config
           fi
           
@@ -157,9 +181,15 @@ jobs:
           echo "CT_GDB_VERSION=\"9.2\"" >> .config
           echo "CT_NEWLIB_VERSION=\"3.3.0\"" >> .config
           
+          # Disable options we don't need for bare-metal
+          echo "CT_SHARED_LIBS=n" >> .config
+          echo "CT_THREADS=\"none\"" >> .config
+          echo "CT_CC_GCC_USE_LTO=n" >> .config
+          
           echo "=== KONFIGURASI YANG DIBUAT ==="
           echo "Target: $(grep CT_TARGET .config)"
           echo "Arch: $(grep CT_ARCH .config)"
+          echo "Kernel: $(grep CT_KERNEL .config)"
           echo "Host: $(grep CT_HOST .config)"
           echo "Prefix: $(grep CT_PREFIX_DIR .config)"
 
@@ -178,6 +208,13 @@ jobs:
           grep -q "CT_TARGET=" .config || (echo "ERROR: CT_TARGET tidak diatur!" && exit 1)
           grep -q "CT_ARCH=" .config || (echo "ERROR: CT_ARCH tidak diatur!" && exit 1)
           grep -q "CT_HOST=" .config || (echo "ERROR: CT_HOST tidak diatur!" && exit 1)
+          grep -q "CT_KERNEL=" .config || (echo "ERROR: CT_KERNEL tidak diatur!" && exit 1)
+          
+          # Ensure kernel is set to "none" for bare-metal
+          if grep -q 'CT_KERNEL="linux"' .config; then
+            echo "ERROR: CT_KERNEL harus 'none' bukan 'linux' untuk ESP32!"
+            exit 1
+          fi
           
           echo "Konfigurasi valid."
 
@@ -189,8 +226,10 @@ jobs:
           echo "=== MEMULAI BUILD ==="
           echo "Target: $TARGET"
           echo "Architecture: $(grep CT_ARCH .config)"
+          echo "Kernel: $(grep CT_KERNEL .config)"
           
           # Clean previous build
+          ./ct-ng clean 2>/dev/null || true
           rm -rf .build/$TARGET
           
           # Set environment variables
@@ -202,25 +241,41 @@ jobs:
           mkdir -p $WORKSPACE/.build/logs
           
           echo "Menjalankan ct-ng build..."
+          echo "Ini mungkin memakan waktu 30-60 menit..."
           
           # Try to build with detailed logging
           set +e
-          ./ct-ng build 2>&1 | tee $WORKSPACE/.build/logs/build.log
-          BUILD_STATUS=$?
+          timeout 7200 ./ct-ng build 2>&1 | tee $WORKSPACE/.build/logs/build.log
+          BUILD_STATUS=${PIPESTATUS[0]}
           set -e
           
           if [ $BUILD_STATUS -eq 0 ]; then
             echo "✓ BUILD SUKSES"
             echo "success=true" >> $GITHUB_OUTPUT
           else
-            echo "✗ BUILD GAGAL"
+            echo "✗ BUILD GAGAL dengan exit code: $BUILD_STATUS"
             echo "success=false" >> $GITHUB_OUTPUT
             
             # Analyze the error
             echo "=== ANALISIS ERROR ==="
-            tail -50 $WORKSPACE/.build/logs/build.log | grep -A5 -B5 "error\|Error\|ERROR\|fail\|Fail\|FAIL" || true
+            
+            if [ $BUILD_STATUS -eq 124 ]; then
+              echo "ERROR: Build timeout setelah 2 jam!"
+            fi
+            
+            echo "--- 50 baris terakhir log ---"
+            tail -50 $WORKSPACE/.build/logs/build.log
+            
+            echo "--- Error lines ---"
+            grep -i "error\|Error\|ERROR\|fail\|Fail\|FAIL\|No such file" $WORKSPACE/.build/logs/build.log | tail -20 || true
             
             # Check for specific errors
+            if grep -q "kernel/.sh" $WORKSPACE/.build/logs/build.log; then
+              echo "ERROR SPESIFIK: Masalah kernel configuration"
+              echo "CT_KERNEL saat ini: $(grep CT_KERNEL .config)"
+              echo "Ubah CT_KERNEL menjadi 'none' bukan 'linux'"
+            fi
+            
             if grep -q "arch/.sh" $WORKSPACE/.build/logs/build.log; then
               echo "ERROR SPESIFIK: Masalah arsitektur script"
               echo "CT_ARCH saat ini: $(grep CT_ARCH .config)"
@@ -237,7 +292,11 @@ jobs:
           # Check if toolchain was built
           if [ -d "$CT_PREFIX_DIR/$TARGET" ]; then
             echo "Toolchain ditemukan di: $CT_PREFIX_DIR/$TARGET"
+            echo "Isi direktori:"
             ls -la $CT_PREFIX_DIR/$TARGET/
+            echo ""
+            echo "Isi bin/:"
+            ls -la $CT_PREFIX_DIR/$TARGET/bin/ 2>/dev/null || echo "bin/ tidak ditemukan"
             
             # Check for key binaries
             if [ -f "$CT_PREFIX_DIR/$TARGET/bin/$TARGET-gcc" ]; then
@@ -245,12 +304,24 @@ jobs:
               $CT_PREFIX_DIR/$TARGET/bin/$TARGET-gcc --version | head -1
             else
               echo "✗ gcc TIDAK ditemukan"
-              find $CT_PREFIX_DIR/$TARGET -name "*gcc*" -type f | head -10
+              echo "Mencari file gcc..."
+              find $CT_PREFIX_DIR/$TARGET -name "*gcc*" -type f 2>/dev/null | head -10 || true
             fi
+            
+            # Check other important tools
+            for tool in g++ ar ld objcopy objdump readelf; do
+              if [ -f "$CT_PREFIX_DIR/$TARGET/bin/$TARGET-$tool" ]; then
+                echo "✓ $tool ditemukan"
+              else
+                echo "✗ $tool tidak ditemukan"
+              fi
+            done
           else
             echo "✗ Direktori toolchain tidak ditemukan"
             echo "Isi $CT_PREFIX_DIR:"
             ls -la $CT_PREFIX_DIR/
+            echo ""
+            echo "Mungkin build gagal meskipun dilaporkan sukses."
             exit 1
           fi
           
@@ -266,7 +337,19 @@ jobs:
           if [ -f "$WORKSPACE/artifacts/$ARTIFACT_NAME" ]; then
             SIZE=$(du -h "$WORKSPACE/artifacts/$ARTIFACT_NAME" | cut -f1)
             echo "✓ Archive berhasil dibuat: $ARTIFACT_NAME ($SIZE)"
+            
+            # Test extraction
+            mkdir -p /tmp/test-extract
+            tar -xzf "$WORKSPACE/artifacts/$ARTIFACT_NAME" -C /tmp/test-extract
+            if [ -f "/tmp/test-extract/$TARGET/bin/$TARGET-gcc" ]; then
+              echo "✓ Archive dapat diekstrak dengan benar"
+            else
+              echo "✗ Archive tidak dapat diekstrak dengan benar"
+            fi
+            rm -rf /tmp/test-extract
+            
             echo "artifact_name=$ARTIFACT_NAME" >> $GITHUB_OUTPUT
+            echo "artifact_path=$WORKSPACE/artifacts/$ARTIFACT_NAME" >> $GITHUB_OUTPUT
           else
             echo "✗ Gagal membuat archive"
             exit 1
@@ -285,5 +368,24 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: build-logs-${{ matrix.target }}
-          path: ${{ env.WORKSPACE }}/.build/logs/
+          path: |
+            ${{ env.WORKSPACE }}/.build/logs/
+            ${{ env.WORKSPACE }}/crosstool-ng/.config
           retention-days: 30
+
+      - name: Notify success
+        if: steps.build.outputs.success == 'true'
+        run: |
+          echo "========================================"
+          echo "🚀 Toolchain $TARGET berhasil dibangun!"
+          echo "📁 Lokasi: $CT_PREFIX_DIR/$TARGET"
+          echo "📦 Archive: ${{ steps.package.outputs.asset_name || 'N/A' }}"
+          echo "========================================"
+
+      - name: Notify failure
+        if: steps.build.outputs.success == 'false'
+        run: |
+          echo "========================================"
+          echo "❌ Gagal membangun toolchain $TARGET"
+          echo "🔧 Lihat artifact 'build-logs-${{ matrix.target }}' untuk debugging"
+          echo "========================================"
