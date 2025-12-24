@@ -1,4 +1,4 @@
-name: Build ESP-IDF Toolchains (ARM64 Host) - OVERLAY FIX
+name: Build ESP-IDF Toolchains (ARM64 Host) - FIXED FINAL
 
 on:
   push:
@@ -65,13 +65,14 @@ jobs:
           
           cd crosstool-ng
           
-          # Cek Folder Overlays (Debug)
-          echo "=== CEK STRUKTUR FOLDER ==="
+          echo "=== DEBUG: CEK FOLDER OVERLAYS ==="
+          ls -la overlays/
+          
+          echo "=== DEBUG: CEK FOLDER XTENSA_ESP32 ==="
           if [ -d "overlays/xtensa_esp32" ]; then
-             echo "✓ Folder overlays/xtensa_esp32 ditemukan!"
+             echo "✓ Folder overlays/xtensa_esp32 ADA."
           else
-             echo "✗ Folder overlays/xtensa_esp32 TIDAK ADA!"
-             ls -R overlays || echo "Folder overlays pun tidak ada!"
+             echo "✗ Folder overlays/xtensa_esp32 TIDAK ADA."
           fi
           
           ./bootstrap
@@ -89,7 +90,7 @@ jobs:
           echo "=== DOWNLOAD MANUAL DEPENDENCIES ==="
           cd $CT_LOCAL_TARBALLS_DIR
           
-          # 1. ISL 0.19 (CRITICAL)
+          # 1. ISL 0.19 (Penyebab utama error download)
           wget --tries=5 --waitretry=5 -O isl-0.19.tar.bz2 https://sources.easybuild.io/i/ISL/isl-0.19.tar.bz2
           
           # 2. GMP 6.2.0
@@ -107,13 +108,13 @@ jobs:
              wget --tries=5 -O mpc-1.1.0.tar.gz https://ftp.gnu.org/gnu/mpc/mpc-1.1.0.tar.gz
           fi
 
-          # Validasi ISL
+          # Validasi File
           if [ ! -s isl-0.19.tar.bz2 ] || [ $(stat -c%s "isl-0.19.tar.bz2") -lt 100000 ]; then
-            rm -f isl-0.19.tar.bz2
-            wget --tries=5 -O isl-0.19.tar.bz2 https://libisl.sourceforge.io/isl-0.19.tar.bz2
+             rm -f isl-0.19.tar.bz2
+             wget --tries=5 -O isl-0.19.tar.bz2 https://libisl.sourceforge.io/isl-0.19.tar.bz2
           fi
 
-      - name: Konfigurasi Toolchain (FIX OVERLAY)
+      - name: Konfigurasi Toolchain (FIX PATH & NAME)
         run: |
           cd $WORKSPACE/crosstool-ng
           
@@ -124,7 +125,7 @@ jobs:
             ./ct-ng $TARGET
           fi
 
-          echo "=== 2. Hapus Variabel Bermasalah ==="
+          echo "=== 2. Hapus Variabel Lama ==="
           sed -i '/CT_PREFIX_DIR/d' .config
           sed -i '/CT_LOCAL_TARBALLS_DIR/d' .config
           sed -i '/CT_HOST/d' .config
@@ -132,11 +133,11 @@ jobs:
           sed -i '/CT_TARGET/d' .config
           sed -i '/CT_ARCH/d' .config
           sed -i '/CT_GDB_CROSS_PYTHON_BINARY/d' .config
-          # Hapus setting overlay lama agar tidak bentrok
+          # Reset setting overlay
           sed -i '/CT_OVERLAY_LOCATION/d' .config
           sed -i '/CT_OVERLAY_NAME/d' .config
 
-          echo "=== 3. Inject Variabel (ABSOLUTE PATHS) ==="
+          echo "=== 3. Inject Variabel ==="
           cat >> .config <<EOF
           
           # --- CI CONFIGURATION ---
@@ -146,9 +147,9 @@ jobs:
           CT_ARCH="xtensa"
           CT_ARCH_XTENSA=y
           
-          # FIX: Force Overlay Location ke Absolute Path
-          # Ini memperbaiki error "Overlay not found"
-          CT_OVERLAY_NAME="esp32"
+          # FIX OVERLAY: Nama harus sesuai dengan folder fisik di repo
+          # Branch esp-2021r2 menggunakan folder "xtensa_esp32"
+          CT_OVERLAY_NAME="xtensa_esp32"
           CT_OVERLAY_LOCATION="$WORKSPACE/crosstool-ng/overlays"
           
           # Environment
@@ -180,7 +181,7 @@ jobs:
           echo "=== 5. Jalankan Oldconfig ==="
           yes "" | ./ct-ng oldconfig
           
-          echo "Cek path overlay di .config:"
+          echo "Verifikasi Config Overlay:"
           grep "CT_OVERLAY" .config
 
       - name: Build Toolchain
