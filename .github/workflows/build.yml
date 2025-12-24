@@ -1,71 +1,203 @@
-name: Build and Public Auto-Release
+name: Build ESP-IDF Toolchains (ARM64 Host)
 
 on:
-  # Pilih salah satu trigger yang sesuai:
-  
-  # OPSI A: Setiap push ke branch main (rekomendasi)
-  push:
-    branches: [ main, master ]
-  
-  # workflow_dispatch:
+  workflow_dispatch:
+    inputs:
+      do_release:
+        description: Create GitHub Release and upload toolchains
+        required: true
+        type: boolean
+        default: false
+      release:
+        description: Release tag / name (example: v1.0.0)
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  CROSSTOOL_NG_VERSION: "1.26.0"
+  CT_HOST_TRIPLET: "aarch64-unknown-linux-gnu"
+  CT_PREFIX_DIR: "${{ github.workspace }}/x-tools"
 
 jobs:
-  build-and-release:
+  prepare:
     runs-on: ubuntu-latest
-    
-    # PERMISSION KRITIS: Diperlukan untuk membuat/mengubah rilis
-    permissions:
-      contents: write
-    
+    outputs:
+      upload_url: ${{ steps.create_release.outputs.upload_url || '' }}
     steps:
-    - name: Checkout kode + submodul
-      uses: actions/checkout@v4
-      with:
-        submodules: recursive  # PENTING jika pakai submodul
-        
-    - name: Setup ESP-IDF dan Build
-      uses: espressif/esp-idf-ci-action@v1
-      with:
-        esp_idf_version: 'v5.1'    # Sesuaikan versi IDF Anda
-        target: 'esp32c3'            # Ganti dengan target chip
-        path: '.'                  # Jika proyek di root
-        # command: idf.py build    # Default, tidak perlu ditulis
-        
-    - name: Buat ZIP seluruh folder build
-      id: zip-build
-      run: |
-        cd build
-        # Buat nama file dengan timestamp (opsional)
-        TIMESTAMP=$(date +'%Y%m%d-%H%M%S')
-        ZIP_NAME="firmware-build-$TIMESTAMP.zip"
-        zip -r ../$ZIP_NAME .
-        echo "zip_name=$ZIP_NAME" >> $GITHUB_OUTPUT
-        
-    - name: Buat/Update Rilis Publik
-      uses: softprops/action-gh-release@v1
-      with:
-        # STRATEGI TAG TETAP: Rilis selalu diupdate di tag yang sama
-        tag_name: 'latest'           # Tag tetap yang selalu diupdate
-        name: 'Build Terbaru'        # Judul rilis
-        body: |
-          Build otomatis terbaru dari branch ${{ github.ref_name }}
-          Commit: ${{ github.sha }}
-          Dibuat pada: ${{ github.event.head_commit.timestamp }}
-          
-          Download file ZIP berisi seluruh folder build.
-        draft: false                 # Langsung publik
-        prerelease: true            # Tandai sebagai pre-release
-        generate_release_notes: true # GitHub buat catatan rilis otomatis
-        
-        # KRITIS: Timpa rilis lama dengan yang baru
-        replace: true
-        
-        # KRITIS: Hapus aset lama sebelum upload baru
-        remove_assets: true
-        
-        # Upload file ZIP yang dibuat
-        files: ${{ steps.zip-build.outputs.zip_name }}
-        
-      env:
-        # Token otomatis dari GitHub
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create GitHub Release
+        id: create_release
+        if: ${{ github.event.inputs.do_release == 'true' }}
+        uses: ncipollo/release-action@v1
+        with:
+          tag: ${{ github.event.inputs.release }}
+          name: ${{ github.event.inputs.release }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  compile:
+    needs: prepare
+    runs-on: ubuntu-22.04-arm
+    continue-on-error: true
+
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        target:
+          - xtensa-esp32-elf
+          - xtensa-esp32s2-elf
+          - xtensa-esp32s3-elf
+          - xtensa-lx106-elf
+          - riscv32-esp-elf
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify runner architecture (ARM64)
+        run: |
+          uname -a
+          lscpu | grep Architecture
+
+      - name: Set environment
+        run: |
+          echo "TARGET=${{ matrix.target }}" >> $GITHUB_ENV
+          echo "CT_PREFIX_DIR=${{ env.CT_PREFIX_DIR }}" >> $GITHUB_ENV
+          echo "CT_HOST_TRIPLET=${{ env.CT_HOST_TRIPLET }}" >> $GITHUB_ENV
+
+      - name: Cache toolchains
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            x-tools
+            ~/.cache/ct-ng
+          key: arm64-ctng-${{ matrix.target }}-${{ env.CROSSTOOL_NG_VERSION }}
+
+      - name: Install build dependencies
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential autoconf bison flex texinfo help2man gawk \
+            libtool libtool-bin libncurses5-dev \
+            python3 python3-dev python3-distutils \
+            git wget unzip pkg-config ca-certificates
+          sudo ln -sf /usr/bin/python3 /usr/bin/python || true
+
+      - name: Build and install crosstool-NG
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          wget -q http://crosstool-ng.org/download/crosstool-ng/crosstool-ng-${CROSSTOOL_NG_VERSION}.tar.bz2
+          tar xf crosstool-ng-${CROSSTOOL_NG_VERSION}.tar.bz2
+          cd crosstool-ng-${CROSSTOOL_NG_VERSION}
+          ./configure --enable-local
+          make -j$(nproc)
+          sudo make install
+
+      - name: Configure crosstool-NG for ${{ matrix.target }}
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          cd crosstool-ng-${CROSSTOOL_NG_VERSION}
+
+          ./ct-ng $TARGET
+
+          echo "CT_PREFIX_DIR=\"${CT_PREFIX_DIR}\"" >> .config
+          echo "CT_HOST=\"${CT_HOST_TRIPLET}\"" >> .config
+
+          echo "CT_KERNEL_BARE_METAL=y" >> .config
+          echo "CT_LIBC_NEWLIB=y" >> .config
+          echo "CT_LIBC=\"newlib\"" >> .config
+
+          echo "CT_CC_LANG_CXX=y" >> .config
+          echo "CT_LOG_PROGRESS_BAR=n" >> .config
+
+          cat .config | tail -n 50
+
+          cp .config $GITHUB_WORKSPACE/.config-${TARGET}
+
+      - name: Build toolchain ${{ matrix.target }}
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          cd crosstool-ng-${CROSSTOOL_NG_VERSION}
+          cp $GITHUB_WORKSPACE/.config-${TARGET} .config
+
+          export HOME=$GITHUB_WORKSPACE
+          mkdir -p "${CT_PREFIX_DIR}"
+
+          ./ct-ng build 2>&1 | tee build-${TARGET}.log
+
+      - name: Verify toolchain
+        run: |
+          TOOLCHAIN_BIN="${CT_PREFIX_DIR}/${TARGET}/bin/${TARGET}-gcc"
+          if [ -x "$TOOLCHAIN_BIN" ]; then
+            "$TOOLCHAIN_BIN" --version
+            echo 'int main(){return 0;}' > test.c
+            "$TOOLCHAIN_BIN" test.c -o test.elf
+            file test.elf
+          else
+            echo "Toolchain binary not found!"
+            exit 1
+          fi
+
+      - name: Package toolchain
+        id: package
+        run: |
+          mkdir -p artifacts
+          ASSET="${TARGET}-host-arm64.tar.gz"
+          tar -C "${CT_PREFIX_DIR}" -czf "artifacts/${ASSET}" "${TARGET}"
+          sha256sum "artifacts/${ASSET}" > "artifacts/${ASSET}.sha256"
+
+          echo "asset=${ASSET}" >> $GITHUB_OUTPUT
+          echo "asset_path=artifacts/${ASSET}" >> $GITHUB_OUTPUT
+
+      - name: Upload artifact (CI)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.asset }}
+          path: |
+            ${{ steps.package.outputs.asset_path }}
+            ${{ steps.package.outputs.asset_path }}.sha256
+
+      - name: Upload to GitHub Release
+        if: ${{ github.event.inputs.do_release == 'true' }}
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ needs.prepare.outputs.upload_url }}
+          asset_path: ${{ steps.package.outputs.asset_path }}
+          asset_name: ${{ steps.package.outputs.asset }}
+          asset_content_type: application/gzip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  summary:
+    needs: [prepare, compile]
+    if: ${{ github.event.inputs.do_release == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Generate checksum summary
+        run: |
+          echo "# ESP-IDF Toolchain Checksums" > summary.md
+          echo '```' >> summary.md
+          find artifacts -name "*.sha256" | sort | while read f; do
+            cat "$f" >> summary.md
+            echo "" >> summary.md
+          done
+          echo '```' >> summary.md
+
+      - name: Update release body
+        uses: ncipollo/release-action@v1
+        with:
+          allowUpdates: true
+          tag: ${{ github.event.inputs.release }}
+          bodyFile: summary.md
+          token: ${{ secrets.GITHUB_TOKEN }}
