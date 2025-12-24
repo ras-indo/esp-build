@@ -19,14 +19,10 @@ jobs:
 
     strategy:
       fail-fast: false
-      max-parallel: 1  # Kurangi parallel untuk debugging
+      max-parallel: 1
       matrix:
         target:
-          - xtensa-esp32-elf  # Coba satu dulu
-          # - xtensa-esp32s2-elf
-          # - xtensa-esp32s3-elf
-          # - xtensa-lx106-elf
-          # - riscv32-esp-elf
+          - xtensa-esp32-elf
 
     steps:
       - name: Checkout repository
@@ -78,7 +74,6 @@ jobs:
           mkdir -p crosstool-ng/.build/tarballs
           cd crosstool-ng/.build/tarballs
           
-          # Download dari mirror yang reliable
           wget -q --tries=3 --timeout=60 https://gcc.gnu.org/pub/gcc/infrastructure/isl-0.22.tar.xz && echo "✓ isl-0.22" || echo "✗ isl-0.22"
           wget -q --tries=3 --timeout=60 https://zlib.net/zlib-1.2.11.tar.xz && echo "✓ zlib-1.2.11" || echo "✗ zlib-1.2.11"
           wget -q --tries=3 --timeout=60 https://gmplib.org/download/gmp/gmp-6.2.0.tar.xz && echo "✓ gmp-6.2.0" || echo "✗ gmp-6.2.0"
@@ -97,22 +92,19 @@ jobs:
           rm -f .config .config.old .config.bak
           
           echo "2. Gunakan ct-ng untuk pilih target..."
-          # Coba pilih target dengan ct-ng, abaikan error
           ./ct-ng $TARGET 2>&1 | grep -v "deprecated\|warning" || true
           
           if [ ! -f .config ]; then
             echo "ct-ng $TARGET gagal, buat manual..."
-            # Template minimal untuk xtensa
-            cat > .config << 'CONFIG_BASIC'
-CT_EXPERIMENTAL=y
-CT_ALLOW_BUILD_AS_ROOT=y
-CT_ALLOW_BUILD_AS_ROOT_SURE=y
-CT_LOG_PROGRESS_BAR=n
-CT_KERNEL_BARE_METAL=y
-CT_LIBC_NEWLIB=y
-CT_CC_LANG_CXX=y
-CT_DEBUG_GDB=y
-CONFIG_BASIC
+            # PERBAIKAN: Ganti heredoc dengan echo
+            echo "CT_EXPERIMENTAL=y" > .config
+            echo "CT_ALLOW_BUILD_AS_ROOT=y" >> .config
+            echo "CT_ALLOW_BUILD_AS_ROOT_SURE=y" >> .config
+            echo "CT_LOG_PROGRESS_BAR=n" >> .config
+            echo "CT_KERNEL_BARE_METAL=y" >> .config
+            echo "CT_LIBC_NEWLIB=y" >> .config
+            echo "CT_CC_LANG_CXX=y" >> .config
+            echo "CT_DEBUG_GDB=y" >> .config
           fi
           
           echo "3. PAKSA SETEL TARGET dengan sed..."
@@ -123,7 +115,6 @@ CONFIG_BASIC
           if [[ "$TARGET" == "xtensa-"* ]]; then
             sed -i '/CT_ARCH/d' .config
             echo "CT_ARCH=\"xtensa\"" >> .config
-            # Core spesifik
             if [[ "$TARGET" == *"esp32"* ]]; then
               echo "CT_ARCH_XTENSA_CORE=\"${TARGET#xtensa-}\"" | sed 's/-elf//' >> .config
               echo "CT_ARCH_XTENSA_SYSTEM=\"lx6\"" >> .config
@@ -154,36 +145,34 @@ CONFIG_BASIC
           ./ct-ng show-config 2>&1 | grep -i "target\|TARGET" || true
 
       - name: Build dengan CT_NG_BUILD_FORCE
+        id: build
         run: |
           cd crosstool-ng
           export HOME=$GITHUB_WORKSPACE
           
-          echo "=== BUILD DENGEN ENV VARIABLES ==="
-          # Force environment untuk pastikan tidak ada cache config lama
+          echo "=== BUILD DENGAN ENV VARIABLES ==="
           export CT_NG_BUILD_FORCE=1
           export CT_ISL_MIRROR="https://gcc.gnu.org/pub/gcc/infrastructure"
           export CT_ZLIB_MIRROR="https://zlib.net"
           export CT_GMP_MIRROR="https://gmplib.org/download/gmp"
           
-          # Buat output directory
           mkdir -p "${CT_PREFIX_DIR}"
           
           echo "Mulai build $TARGET..."
           echo "Menggunakan config:"
           grep "CT_TARGET\|CT_ARCH\|CT_HOST" .config || echo "Config tidak terbaca"
           
-          # Build dengan logging detail
-          set +e  # Jangan exit on error dulu
+          set +e
           ./ct-ng build 2>&1 | tee build-full.log
           BUILD_STATUS=$?
           set -e
           
           if [ $BUILD_STATUS -eq 0 ]; then
             echo "✓✓✓ BUILD SUKSES! ✓✓✓"
+            echo "success=true" >> $GITHUB_OUTPUT
           else
             echo "✗✗✗ BUILD GAGAL ✗✗✗"
             
-            # Analisis cepat
             echo "=== ERROR ANALYSIS ==="
             echo "1. Ada 'alphaev4' dalam log?"
             grep -i "alphaev4" build-full.log && echo "YA ADA!" || echo "TIDAK ADA"
@@ -198,10 +187,13 @@ CONFIG_BASIC
             echo "4. 20 baris terakhir log:"
             tail -20 build-full.log
             
+            echo "success=false" >> $GITHUB_OUTPUT
             exit 1
           fi
 
       - name: Verifikasi hasil build
+        if: steps.build.outputs.success == 'true'
+        id: package
         run: |
           echo "Memverifikasi toolchain $TARGET..."
           
@@ -209,7 +201,6 @@ CONFIG_BASIC
             echo "✓✓✓ SUKSES: Toolchain $TARGET ADA! ✓✓✓"
             "${CT_PREFIX_DIR}/${TARGET}/bin/${TARGET}-gcc" --version | head -1
             
-            # Package hasil
             mkdir -p artifacts
             ASSET="${TARGET}-host-arm64.tar.gz"
             tar -czf "artifacts/${ASSET}" -C "${CT_PREFIX_DIR}" "${TARGET}"
@@ -224,9 +215,21 @@ CONFIG_BASIC
           fi
 
       - name: Upload artifact
+        if: steps.build.outputs.success == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.package.outputs.asset_name || matrix.target }}-arm64
           path: |
             artifacts/
           retention-days: 7
+
+      - name: Simpan log error untuk debugging
+        if: steps.build.outputs.success == 'false'
+        run: |
+          echo "Menyimpan log error untuk analisis..."
+          mkdir -p error-logs
+          cp crosstool-ng/build-full.log error-logs/build-${{ matrix.target }}.log 2>/dev/null || true
+          cp crosstool-ng/.config error-logs/config-${{ matrix.target }}.txt 2>/dev/null || true
+          
+          echo "Log error disimpan di error-logs/"
+          ls -la error-logs/
