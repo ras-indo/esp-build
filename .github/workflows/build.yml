@@ -1,4 +1,4 @@
-name: Build ESP-IDF Toolchains (ARM64 Host) - FIXED FINAL
+name: Build ESP-IDF Toolchains (ARM64 Host) - OVERLAY FIX
 
 on:
   push:
@@ -64,6 +64,16 @@ jobs:
           mv crosstool-NG crosstool-ng
           
           cd crosstool-ng
+          
+          # Cek Folder Overlays (Debug)
+          echo "=== CEK STRUKTUR FOLDER ==="
+          if [ -d "overlays/xtensa_esp32" ]; then
+             echo "✓ Folder overlays/xtensa_esp32 ditemukan!"
+          else
+             echo "✗ Folder overlays/xtensa_esp32 TIDAK ADA!"
+             ls -R overlays || echo "Folder overlays pun tidak ada!"
+          fi
+          
           ./bootstrap
           ./configure --enable-local --prefix=/usr/local
           make -j$(nproc)
@@ -79,48 +89,31 @@ jobs:
           echo "=== DOWNLOAD MANUAL DEPENDENCIES ==="
           cd $CT_LOCAL_TARBALLS_DIR
           
-          # 1. ISL 0.19 (CRITICAL FIX)
-          # Link GCC mati (404), kita ganti ke mirror EasyBuild yang stabil untuk file lama
-          echo "Downloading isl-0.19.tar.bz2..."
+          # 1. ISL 0.19 (CRITICAL)
           wget --tries=5 --waitretry=5 -O isl-0.19.tar.bz2 https://sources.easybuild.io/i/ISL/isl-0.19.tar.bz2
           
           # 2. GMP 6.2.0
           if [ ! -f "gmp-6.2.0.tar.xz" ]; then
-             echo "Downloading gmp-6.2.0.tar.xz..."
              wget --tries=5 -O gmp-6.2.0.tar.xz https://ftp.gnu.org/gnu/gmp/gmp-6.2.0.tar.xz
           fi
           
           # 3. MPFR 4.0.2
           if [ ! -f "mpfr-4.0.2.tar.xz" ]; then
-             echo "Downloading mpfr-4.0.2.tar.xz..."
              wget --tries=5 -O mpfr-4.0.2.tar.xz https://ftp.gnu.org/gnu/mpfr/mpfr-4.0.2.tar.xz
           fi
           
           # 4. MPC 1.1.0
           if [ ! -f "mpc-1.1.0.tar.gz" ]; then
-             echo "Downloading mpc-1.1.0.tar.gz..."
              wget --tries=5 -O mpc-1.1.0.tar.gz https://ftp.gnu.org/gnu/mpc/mpc-1.1.0.tar.gz
           fi
 
-          echo "=== Cek Integritas File ==="
-          ls -lh
-          
-          # Pastikan file ISL benar-benar terdownload (bukan file html error)
+          # Validasi ISL
           if [ ! -s isl-0.19.tar.bz2 ] || [ $(stat -c%s "isl-0.19.tar.bz2") -lt 100000 ]; then
-            echo "FATAL ERROR: Download ISL gagal atau file corrupt!"
             rm -f isl-0.19.tar.bz2
-            
-            echo "Mencoba Link Cadangan untuk ISL..."
             wget --tries=5 -O isl-0.19.tar.bz2 https://libisl.sourceforge.io/isl-0.19.tar.bz2
-            
-            if [ ! -s isl-0.19.tar.bz2 ]; then
-               echo "FATAL: Semua link ISL gagal."
-               exit 1
-            fi
           fi
-          echo "Semua library berhasil didownload."
 
-      - name: Konfigurasi Toolchain
+      - name: Konfigurasi Toolchain (FIX OVERLAY)
         run: |
           cd $WORKSPACE/crosstool-ng
           
@@ -131,7 +124,7 @@ jobs:
             ./ct-ng $TARGET
           fi
 
-          echo "=== 2. Hapus Variabel Lama ==="
+          echo "=== 2. Hapus Variabel Bermasalah ==="
           sed -i '/CT_PREFIX_DIR/d' .config
           sed -i '/CT_LOCAL_TARBALLS_DIR/d' .config
           sed -i '/CT_HOST/d' .config
@@ -139,8 +132,11 @@ jobs:
           sed -i '/CT_TARGET/d' .config
           sed -i '/CT_ARCH/d' .config
           sed -i '/CT_GDB_CROSS_PYTHON_BINARY/d' .config
+          # Hapus setting overlay lama agar tidak bentrok
+          sed -i '/CT_OVERLAY_LOCATION/d' .config
+          sed -i '/CT_OVERLAY_NAME/d' .config
 
-          echo "=== 3. Inject Variabel ==="
+          echo "=== 3. Inject Variabel (ABSOLUTE PATHS) ==="
           cat >> .config <<EOF
           
           # --- CI CONFIGURATION ---
@@ -149,6 +145,11 @@ jobs:
           # Fix Arsitektur
           CT_ARCH="xtensa"
           CT_ARCH_XTENSA=y
+          
+          # FIX: Force Overlay Location ke Absolute Path
+          # Ini memperbaiki error "Overlay not found"
+          CT_OVERLAY_NAME="esp32"
+          CT_OVERLAY_LOCATION="$WORKSPACE/crosstool-ng/overlays"
           
           # Environment
           CT_HOST="$CT_HOST_TRIPLET"
@@ -178,15 +179,16 @@ jobs:
 
           echo "=== 5. Jalankan Oldconfig ==="
           yes "" | ./ct-ng oldconfig
+          
+          echo "Cek path overlay di .config:"
+          grep "CT_OVERLAY" .config
 
       - name: Build Toolchain
         id: build
         run: |
           cd $WORKSPACE/crosstool-ng
           
-          # Bersihkan build sementara
           rm -rf .build/$TARGET
-          
           export CT_NG_BUILD_FORCE=1
           export CT_ALLOW_BUILD_AS_ROOT=y
           export CT_ALLOW_BUILD_AS_ROOT_SURE=y
