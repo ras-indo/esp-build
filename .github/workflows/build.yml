@@ -1,26 +1,25 @@
-
 name: Build ESP-IDF Toolchains (ARM64 Host)
 
 on:
   workflow_dispatch:
     inputs:
       do_release:
-        type: boolean
         description: 'Create GitHub Release and upload toolchains'
         required: true
         default: false
+        type: boolean
       release:
-        type: string
         description: 'Release tag / name (example: v1.0.0)'
         required: true
+        type: string
 
 permissions:
   contents: write
 
 env:
-  CROSSTOOL_NG_VERSION: "1.26.0"
-  CT_HOST_TRIPLET: "aarch64-unknown-linux-gnu"
-  CT_PREFIX_DIR: "/github/workspace/x-tools"
+  CROSSTOOL_NG_VERSION: '1.26.0'
+  CT_HOST_TRIPLET: 'aarch64-unknown-linux-gnu'
+  CT_PREFIX_DIR: '/github/workspace/x-tools'
 
 jobs:
   prepare:
@@ -196,7 +195,6 @@ jobs:
           echo "# ESP-IDF Toolchain Checksums" > summary.md
           echo '```' >> summary.md
           find artifacts -name "*.sha256" | sort | while read f; do
-            echo "## $(basename "${f}")" >> summary.md
             cat "$f" >> summary.md
             echo "" >> summary.md
           done
