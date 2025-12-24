@@ -16,16 +16,16 @@ on:
 permissions:
   contents: write
 
+# Keep top-level env simple and free of GH expression interpolation to avoid YAML parse issues.
 env:
   CROSSTOOL_NG_VERSION: "1.26.0"
   CT_HOST_TRIPLET: "aarch64-unknown-linux-gnu"
-  CT_PREFIX_DIR: "${{ github.workspace }}/x-tools"
+  # Use runner path that is always present: /github/workspace
+  CT_PREFIX_DIR: "/github/workspace/x-tools"
 
 jobs:
   prepare:
     runs-on: ubuntu-latest
-    # Note: do NOT try to provide a fallback expression using `||` here; GitHub expressions
-    # do not accept that JS-like operator. We just forward the step output directly.
     outputs:
       upload_url: ${{ steps.create_release.outputs.upload_url }}
     steps:
@@ -73,6 +73,7 @@ jobs:
           echo "TARGET=${{ matrix.target }}" >> $GITHUB_ENV
           echo "CT_PREFIX_DIR=${{ env.CT_PREFIX_DIR }}" >> $GITHUB_ENV
           echo "CT_HOST_TRIPLET=${{ env.CT_HOST_TRIPLET }}" >> $GITHUB_ENV
+          echo "CROSSTOOL_NG_VERSION=${{ env.CROSSTOOL_NG_VERSION }}" >> $GITHUB_ENV
 
       - name: Cache toolchains and ct-ng cache
         id: cache
@@ -157,11 +158,9 @@ jobs:
         run: |
           mkdir -p artifacts
           ASSET="${TARGET}-host-arm64.tar.gz"
-          # Prefer packaging the specific toolchain directory
           if [ -d "${CT_PREFIX_DIR}/${TARGET}" ]; then
             tar -C "${CT_PREFIX_DIR}" -czf "artifacts/${ASSET}" "${TARGET}"
           else
-            # fallback: package entire prefix if target dir layout differs
             tar -C "${CT_PREFIX_DIR}" -czf "artifacts/${ASSET}" .
           fi
           sha256sum "artifacts/${ASSET}" > "artifacts/${ASSET}.sha256"
