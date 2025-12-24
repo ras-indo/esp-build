@@ -1,4 +1,4 @@
-name: Build ESP-IDF Toolchains (ARM64 Host) - SYMLINK FIX
+name: Build ESP-IDF Toolchains (ARM64 Host) - FINAL SUBMODULE FIX
 
 on:
   push:
@@ -57,13 +57,29 @@ jobs:
           # Fix python3 symlink
           sudo ln -sf /usr/bin/python3 /usr/bin/python || true
 
-      - name: Download & Install crosstool-NG
+      - name: Download & Install crosstool-NG (FIXED)
         run: |
           echo "Mengunduh crosstool-NG branch: $CROSSTOOL_NG_VERSION"
-          git clone --depth=1 https://github.com/espressif/crosstool-NG.git -b $CROSSTOOL_NG_VERSION
+          # Hapus --depth=1 agar submodule update berjalan lancar tanpa error commit history
+          git clone https://github.com/espressif/crosstool-NG.git -b $CROSSTOOL_NG_VERSION
           mv crosstool-NG crosstool-ng
           
           cd crosstool-ng
+          
+          echo "=== INITIALIZING SUBMODULES (SOLUSI OVERLAY KOSONG) ==="
+          # INI LANGKAH KRUSIAL YANG HILANG SEBELUMNYA
+          git submodule update --init --recursive
+          
+          echo "=== DEBUG: CEK ISI FOLDER OVERLAYS ==="
+          ls -la overlays/
+          
+          if [ ! -d "overlays/xtensa_esp32" ]; then
+             echo "FATAL: Submodule gagal! overlays/xtensa_esp32 masih tidak ada."
+             exit 1
+          else
+             echo "✓ SUKSES: Folder overlays/xtensa_esp32 ditemukan."
+          fi
+          
           ./bootstrap
           ./configure --enable-local --prefix=/usr/local
           make -j$(nproc)
@@ -79,7 +95,7 @@ jobs:
           echo "=== DOWNLOAD MANUAL DEPENDENCIES ==="
           cd $CT_LOCAL_TARBALLS_DIR
           
-          # 1. ISL 0.19 (CRITICAL)
+          # 1. ISL 0.19 (Penyebab error 404)
           wget --tries=5 --waitretry=5 -O isl-0.19.tar.bz2 https://sources.easybuild.io/i/ISL/isl-0.19.tar.bz2
           
           # 2. GMP 6.2.0
@@ -99,39 +115,15 @@ jobs:
 
           # Validasi ISL
           if [ ! -s isl-0.19.tar.bz2 ] || [ $(stat -c%s "isl-0.19.tar.bz2") -lt 100000 ]; then
-            rm -f isl-0.19.tar.bz2
-            wget --tries=5 -O isl-0.19.tar.bz2 https://libisl.sourceforge.io/isl-0.19.tar.bz2
+             rm -f isl-0.19.tar.bz2
+             # Link cadangan
+             wget --tries=5 -O isl-0.19.tar.bz2 https://libisl.sourceforge.io/isl-0.19.tar.bz2
           fi
 
-      - name: Konfigurasi Toolchain (SYMLINK STRATEGY)
+      - name: Konfigurasi Toolchain
         run: |
           cd $WORKSPACE/crosstool-ng
           
-          # --- STRATEGI SYMLINK ANTI-GAGAL ---
-          echo "=== MEMBUAT SYMLINK OVERLAYS ==="
-          cd overlays
-          
-          # Cek folder asli
-          if [ -d "xtensa_esp32" ]; then
-             echo "Folder asli 'xtensa_esp32' ditemukan."
-             
-             # Buat symlink untuk semua kemungkinan nama yang mungkin dicari ct-ng
-             # 1. Jika dia mencari 'xtensa_xtensa_esp32' (Double prefix)
-             ln -s xtensa_esp32 xtensa_xtensa_esp32
-             
-             # 2. Jika dia mencari 'esp32' (Tanpa prefix)
-             ln -s xtensa_esp32 esp32
-             
-             echo "Symlinks dibuat. Daftar folder overlays:"
-             ls -la
-          else
-             echo "FATAL: Folder overlays/xtensa_esp32 tidak ditemukan!"
-             ls -la
-             exit 1
-          fi
-          cd ..
-          
-          # --- KONFIGURASI CONFIG ---
           echo "=== 1. Load Sample Config ==="
           if [ -f "samples/$TARGET/crosstool.config" ]; then
             cp samples/$TARGET/crosstool.config .config
@@ -139,7 +131,7 @@ jobs:
             ./ct-ng $TARGET
           fi
 
-          echo "=== 2. Hapus Variabel ==="
+          echo "=== 2. Hapus Variabel Lama ==="
           sed -i '/CT_PREFIX_DIR/d' .config
           sed -i '/CT_LOCAL_TARBALLS_DIR/d' .config
           sed -i '/CT_HOST/d' .config
@@ -160,8 +152,10 @@ jobs:
           CT_ARCH="xtensa"
           CT_ARCH_XTENSA=y
           
-          # FIX OVERLAY: Kita set "esp32", ct-ng akan mencari "xtensa_esp32"
-          # Kalaupun dia mencari nama lain, symlink di atas sudah menanganinya.
+          # FIX OVERLAY:
+          # Folder di disk sekarang ada: "overlays/xtensa_esp32"
+          # Kita set "esp32", script akan mencari "xtensa_" + "esp32" = "xtensa_esp32"
+          # Ini akan COCOK sekarang.
           CT_OVERLAY_NAME="esp32"
           CT_OVERLAY_LOCATION="$WORKSPACE/crosstool-ng/overlays"
           
