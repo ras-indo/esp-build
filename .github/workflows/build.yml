@@ -4,14 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       do_release:
-        type: boolean
-        description: "Create GitHub Release and upload toolchains"
+        description: 'Create GitHub Release and upload toolchains'
         required: true
         default: false
+        type: boolean
       release:
-        type: string
-        description: "Release tag / name (example: v1.0.0)"
+        description: 'Release tag / name (example: v1.0.0)'
         required: true
+        type: string
 
 permissions:
   contents: write
