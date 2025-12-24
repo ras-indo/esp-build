@@ -117,57 +117,45 @@ jobs:
             cp samples/$TARGET/crosstool.config .config
           else
             echo "Membuat configuration manual untuk bare-metal ESP32"
-            # Create configuration using a heredoc to ensure all lines are added
-            cat > .config << 'EOF'
-CT_OBSOLETE=y
-CT_EXPERIMENTAL=y
-CT_ALLOW_BUILD_AS_ROOT=y
-CT_ALLOW_BUILD_AS_ROOT_SURE=y
-CT_LOG_PROGRESS_BAR=n
-CT_KERNEL_NONE=y
-CT_KERNEL="none"
-CT_LIBC_NEWLIB=y
-CT_CC_LANG_CXX=y
-CT_DEBUG_GDB=y
-CT_CC_GCC=y
-CT_BINUTILS=y
-CT_GDB=y
-CT_PATCH_BUNDLED=y
-CT_PATCH_BUNDLED_LOCAL=n
-CT_PATCH_LOCAL=n
-CT_PATCH_NONE=n
-CT_TARGET="xtensa-esp32-elf"
-CT_ARCH="xtensa"
-CT_ARCH_XTENSA=y
-CT_ARCH_XTENSA_CPU="lx6"
-CT_ARCH_XTENSA_CORE="custom"
-CT_ARCH_XTENSA_CORE="esp32"
-CT_HOST="aarch64-unknown-linux-gnu"
-CT_PREFIX_DIR="$CT_PREFIX_DIR"
-CT_LOCAL_TARBALLS_DIR="$CT_LOCAL_TARBALLS_DIR"
-CT_USE_PIPES=y
-CT_PARALLEL_JOBS=4
-CT_GCC_VERSION="8.4.0"
-CT_BINUTILS_VERSION="2.36.1"
-CT_GDB_VERSION="9.2"
-CT_NEWLIB_VERSION="3.3.0"
-CT_SHARED_LIBS=n
-CT_THREADS="none"
-CT_CC_GCC_USE_LTO=n
-EOF
+            
+            # Buat file konfigurasi menggunakan echo (tanpa heredoc)
+            echo "CT_OBSOLETE=y" > .config
+            echo "CT_EXPERIMENTAL=y" >> .config
+            echo "CT_ALLOW_BUILD_AS_ROOT=y" >> .config
+            echo "CT_ALLOW_BUILD_AS_ROOT_SURE=y" >> .config
+            echo "CT_LOG_PROGRESS_BAR=n" >> .config
+            echo "CT_KERNEL_NONE=y" >> .config
+            echo 'CT_KERNEL="none"' >> .config
+            echo "CT_LIBC_NEWLIB=y" >> .config
+            echo "CT_CC_LANG_CXX=y" >> .config
+            echo "CT_DEBUG_GDB=y" >> .config
+            echo "CT_CC_GCC=y" >> .config
+            echo "CT_BINUTILS=y" >> .config
+            echo "CT_GDB=y" >> .config
+            echo "CT_PATCH_BUNDLED=y" >> .config
+            echo "CT_PATCH_BUNDLED_LOCAL=n" >> .config
+            echo "CT_PATCH_LOCAL=n" >> .config
+            echo "CT_PATCH_NONE=n" >> .config
+            echo "CT_TARGET=\"$TARGET\"" >> .config
+            echo 'CT_ARCH="xtensa"' >> .config
+            echo "CT_ARCH_XTENSA=y" >> .config
+            echo 'CT_ARCH_XTENSA_CPU="lx6"' >> .config
+            echo 'CT_ARCH_XTENSA_CORE="custom"' >> .config
+            echo "CT_HOST=\"$CT_HOST_TRIPLET\"" >> .config
+            echo "CT_PREFIX_DIR=\"$CT_PREFIX_DIR\"" >> .config
+            echo "CT_LOCAL_TARBALLS_DIR=\"$CT_LOCAL_TARBALLS_DIR\"" >> .config
+            echo "CT_USE_PIPES=y" >> .config
+            echo "CT_PARALLEL_JOBS=$(nproc)" >> .config
+            echo 'CT_GCC_VERSION="8.4.0"' >> .config
+            echo 'CT_BINUTILS_VERSION="2.36.1"' >> .config
+            echo 'CT_GDB_VERSION="9.2"' >> .config
+            echo 'CT_NEWLIB_VERSION="3.3.0"' >> .config
+            echo "CT_SHARED_LIBS=n" >> .config
+            echo 'CT_THREADS="none"' >> .config
+            echo "CT_CC_GCC_USE_LTO=n" >> .config
           fi
           
-          # Update paths with actual values (replace placeholders)
-          sed -i "s|CT_PREFIX_DIR=\"\\$CT_PREFIX_DIR\"|CT_PREFIX_DIR=\"$CT_PREFIX_DIR\"|g" .config
-          sed -i "s|CT_LOCAL_TARBALLS_DIR=\"\\$CT_LOCAL_TARBALLS_DIR\"|CT_LOCAL_TARBALLS_DIR=\"$CT_LOCAL_TARBALLS_DIR\"|g" .config
-          
-          # Update parallel jobs
-          sed -i "s|CT_PARALLEL_JOBS=4|CT_PARALLEL_JOBS=$(nproc)|g" .config
-          
-          # Ensure CT_TARGET is correct
-          sed -i "s|CT_TARGET=\".*\"|CT_TARGET=\"$TARGET\"|g" .config
-          
-          # For specific ESP32 variants
+          # Untuk varian ESP32 spesifik
           if [[ "$TARGET" == *"esp32"* ]]; then
             sed -i 's|CT_ARCH_XTENSA_CORE="custom"|CT_ARCH_XTENSA_CORE="esp32"|g' .config
           fi
