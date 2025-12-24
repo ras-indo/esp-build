@@ -96,14 +96,12 @@ jobs:
             echo "Config downloaded successfully"
           else
             echo "WARNING: Config not found at $CONFIG_URL"
-            # Gunakan config dasar
-            cat > esp-configs/$TARGET.config << 'EOF'
-CT_EXPERIMENTAL=y
-CT_ALLOW_BUILD_AS_ROOT=y
-CT_ALLOW_BUILD_AS_ROOT_SURE=y
-CT_LOG_PROGRESS_BAR=n
-CT_LOG_LEVEL_MAX=INFO
-EOF
+            # Gunakan config dasar - TIDAK PAKAI HEREDOC
+            echo "CT_EXPERIMENTAL=y" > esp-configs/$TARGET.config
+            echo "CT_ALLOW_BUILD_AS_ROOT=y" >> esp-configs/$TARGET.config
+            echo "CT_ALLOW_BUILD_AS_ROOT_SURE=y" >> esp-configs/$TARGET.config
+            echo "CT_LOG_PROGRESS_BAR=n" >> esp-configs/$TARGET.config
+            echo "CT_LOG_LEVEL_MAX=INFO" >> esp-configs/$TARGET.config
           fi
 
       - name: Prepare configuration for ${{ matrix.target }}
