@@ -1,4 +1,4 @@
-name: Build ESP-IDF Toolchains (ARM64 Host) - FIXED
+name: Build ESP-IDF Toolchains (ARM64 Host) - FIXED MIRROR
 
 on:
   push:
@@ -16,7 +16,7 @@ env:
 jobs:
   compile:
     runs-on: ubuntu-22.04-arm
-    timeout-minutes: 360 # Build toolchain lama, kasih waktu 6 jam
+    timeout-minutes: 360 # Build toolchain lama butuh waktu lama
     
     strategy:
       fail-fast: false
@@ -30,7 +30,7 @@ jobs:
 
       - name: Bersihkan Workspace
         run: |
-          echo "Membersihkan sisa build sebelumnya..."
+          echo "Membersihkan workspace..."
           rm -rf crosstool-ng .build x-tools artifacts
           mkdir -p x-tools artifacts
 
@@ -42,7 +42,7 @@ jobs:
           echo "CROSSTOOL_NG_VERSION=${{ env.CROSSTOOL_NG_VERSION }}" >> $GITHUB_ENV
           echo "WORKSPACE=$GITHUB_WORKSPACE" >> $GITHUB_ENV
 
-      - name: Install Dependencies Ubuntu
+      - name: Install Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -54,7 +54,7 @@ jobs:
             libgmp-dev libmpfr-dev libmpc-dev libexpat1-dev zlib1g-dev \
             g++ gcc make patch gettext
           
-          # Fix: Pastikan perintah 'python' mengarah ke python3
+          # Fix: Pastikan command 'python' mengarah ke python3
           sudo ln -sf /usr/bin/python3 /usr/bin/python || true
 
       - name: Download & Install crosstool-NG
@@ -75,62 +75,58 @@ jobs:
           mkdir -p $WORKSPACE/.build/tarballs
           echo "CT_LOCAL_TARBALLS_DIR=$WORKSPACE/.build/tarballs" >> $GITHUB_ENV
 
-      - name: Pre-download Tarballs (Opsional)
-        run: |
-          # Download library dasar untuk mencegah timeout saat build
-          cd $CT_LOCAL_TARBALLS_DIR
-          wget -q --tries=3 --timeout=60 -c https://ftp.gnu.org/gnu/gmp/gmp-6.2.1.tar.xz || true
-          wget -q --tries=3 --timeout=60 -c https://ftp.gnu.org/gnu/mpfr/mpfr-4.1.0.tar.xz || true
-          wget -q --tries=3 --timeout=60 -c https://ftp.gnu.org/gnu/mpc/mpc-1.2.1.tar.gz || true
-
-      - name: Konfigurasi dan Fix Variabel (CRITICAL STEP)
+      - name: Konfigurasi Smart Mirror & Fixes
         run: |
           cd $WORKSPACE/crosstool-ng
           
-          echo "=== 1. Copy Sample Config ==="
+          echo "=== 1. Load Sample Config ==="
           if [ -f "samples/$TARGET/crosstool.config" ]; then
             cp samples/$TARGET/crosstool.config .config
-            echo "Sample config ditemukan dan disalin."
+            echo "Sample config dimuat."
           else
-            echo "Sample config TIDAK ditemukan, menggunakan default."
+            echo "Sample tidak ditemukan, load default."
             ./ct-ng $TARGET
           fi
 
-          echo "=== 2. Hapus Variabel Lama (Clean Up) ==="
-          # Hapus variabel yang akan kita override supaya tidak duplikat/bentrok
+          echo "=== 2. Bersihkan Variabel Lama ==="
+          # Hapus variabel yang akan kita override agar tidak bentrok
           sed -i '/CT_PREFIX_DIR/d' .config
           sed -i '/CT_LOCAL_TARBALLS_DIR/d' .config
           sed -i '/CT_HOST/d' .config
           sed -i '/CT_PARALLEL_JOBS/d' .config
-          sed -i '/CT_LOG_PROGRESS_BAR/d' .config
           sed -i '/CT_TARGET/d' .config
           sed -i '/CT_ARCH/d' .config
+          sed -i '/CT_PRE_MIRROR_URLS/d' .config 
           sed -i '/CT_GDB_CROSS_PYTHON_BINARY/d' .config
 
-          echo "=== 3. Inject Variabel Wajib (Fix Error arch/.sh) ==="
+          echo "=== 3. Inject Variabel & Mirror Fix ==="
           cat >> .config <<EOF
           
-          # --- CI OVERRIDES ---
+          # --- CI CONFIGURATION ---
           CT_TARGET="$TARGET"
           
-          # FIX: Definisikan string arch secara eksplisit
+          # Fix Arsitektur (mencegah error arch/.sh)
           CT_ARCH="xtensa"
           CT_ARCH_XTENSA=y
           
-          # Environment Settings
+          # Environment
           CT_HOST="$CT_HOST_TRIPLET"
           CT_PREFIX_DIR="$CT_PREFIX_DIR"
           CT_LOCAL_TARBALLS_DIR="$CT_LOCAL_TARBALLS_DIR"
           CT_PARALLEL_JOBS=$(nproc)
           CT_LOG_PROGRESS_BAR=n
           
-          # Permissions & Experimental
+          # Izin & Python
           CT_EXPERIMENTAL=y
           CT_ALLOW_BUILD_AS_ROOT=y
           CT_ALLOW_BUILD_AS_ROOT_SURE=y
-          
-          # Fix Python 3 untuk GDB
           CT_GDB_CROSS_PYTHON_BINARY="python3"
+
+          # --- MIRROR SETTINGS (SOLUSI DOWNLOAD) ---
+          # Mirror infrastruktur GCC. Sangat stabil.
+          # Berisi: isl, gmp, mpfr, mpc, zlib.
+          CT_PRE_MIRROR_URLS="https://gcc.gnu.org/pub/gcc/infrastructure/"
+          
           EOF
 
           echo "=== 4. Khusus ESP32 Core ==="
@@ -138,7 +134,7 @@ jobs:
              if ! grep -q "CT_ARCH_XTENSA_CORE" .config; then
                 echo 'CT_ARCH_XTENSA_CORE="esp32"' >> .config
              fi
-             # Pastikan Kernel None (Bare Metal)
+             # Pastikan Kernel = None (Bare Metal)
              if grep -q "CT_KERNEL" .config; then
                 sed -i 's/^CT_KERNEL=.*/CT_KERNEL="none"/' .config
              else
@@ -146,20 +142,18 @@ jobs:
              fi
           fi
 
-          echo "=== 5. Jalankan Oldconfig (Sanitasi Otomatis) ==="
-          # Ini langkah PENTING. yes "" akan menekan Enter otomatis untuk semua prompt
-          # Ini akan melengkapi variabel internal yang hilang.
+          echo "=== 5. Jalankan Oldconfig (Sanitasi) ==="
+          # Otomatis melengkapi config internal
           yes "" | ./ct-ng oldconfig
-
-          echo "=== Cek Konfigurasi Final ==="
-          grep -E "CT_ARCH=|CT_HOST=|CT_PREFIX_DIR=" .config
+          
+          echo "Konfigurasi Selesai."
 
       - name: Build Toolchain
         id: build
         run: |
           cd $WORKSPACE/crosstool-ng
           
-          # Bersihkan folder build sementara
+          # Bersihkan build sementara
           rm -rf .build/$TARGET
           
           export CT_NG_BUILD_FORCE=1
@@ -167,8 +161,8 @@ jobs:
           export CT_ALLOW_BUILD_AS_ROOT_SURE=y
           export HOME=$WORKSPACE
           
-          echo "Memulai proses build... (bisa memakan waktu 30-60 menit)"
-          # Langsung jalankan tanpa pipe ke file log agar real-time output keluar di Actions
+          echo "Memulai build... (Estimasi: 45-60 menit)"
+          # Jalankan tanpa pipe agar output keluar real-time
           ./ct-ng build
           
           echo "success=true" >> $GITHUB_OUTPUT
@@ -177,14 +171,14 @@ jobs:
         if: steps.build.outputs.success == 'true'
         id: package
         run: |
-          echo "Membuat paket arsip..."
+          echo "=== PACKAGING ==="
           
-          # Validasi hasil build
           if [ ! -f "$CT_PREFIX_DIR/$TARGET/bin/$TARGET-gcc" ]; then
              echo "FATAL: GCC binary tidak ditemukan!"
              exit 1
           fi
 
+          # Nama file standar: xtensa-esp32-elf-gcc8_4_0-esp-2021r2-linux-arm64.tar.gz
           ARTIFACT_NAME="${TARGET}-gcc8_4_0-${CROSSTOOL_NG_VERSION}-linux-arm64.tar.gz"
           
           cd "$CT_PREFIX_DIR"
