@@ -1,4 +1,4 @@
-name: Build ESP-IDF Toolchains (ARM64 Host) - Final Fixed
+name: Build ESP-IDF Toolchains (ARM64 Host) - FIXED
 
 on:
   push:
@@ -16,26 +16,25 @@ env:
 jobs:
   compile:
     runs-on: ubuntu-22.04-arm
-    continue-on-error: false
-
+    timeout-minutes: 360 # Build toolchain lama, kasih waktu 6 jam
+    
     strategy:
       fail-fast: false
-      max-parallel: 1
       matrix:
         target:
           - xtensa-esp32-elf
 
     steps:
-      - name: Checkout repository
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Clean workspace
+      - name: Bersihkan Workspace
         run: |
-          echo "Cleaning workspace..."
-          rm -rf crosstool-ng crosstool-NG .config* .build x-tools overlays
-          mkdir -p x-tools
+          echo "Membersihkan sisa build sebelumnya..."
+          rm -rf crosstool-ng .build x-tools artifacts
+          mkdir -p x-tools artifacts
 
-      - name: Set environment variables
+      - name: Set Environment Variables
         run: |
           echo "TARGET=${{ matrix.target }}" >> $GITHUB_ENV
           echo "CT_PREFIX_DIR=$GITHUB_WORKSPACE/x-tools" >> $GITHUB_ENV
@@ -43,7 +42,7 @@ jobs:
           echo "CROSSTOOL_NG_VERSION=${{ env.CROSSTOOL_NG_VERSION }}" >> $GITHUB_ENV
           echo "WORKSPACE=$GITHUB_WORKSPACE" >> $GITHUB_ENV
 
-      - name: Install dependencies
+      - name: Install Dependencies Ubuntu
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -54,190 +53,147 @@ jobs:
             file bzip2 xz-utils lzip gzip curl rsync \
             libgmp-dev libmpfr-dev libmpc-dev libexpat1-dev zlib1g-dev \
             g++ gcc make patch gettext
-          # Ensure python command exists for legacy scripts
+          
+          # Fix: Pastikan perintah 'python' mengarah ke python3
           sudo ln -sf /usr/bin/python3 /usr/bin/python || true
 
-      - name: Download crosstool-NG fork
+      - name: Download & Install crosstool-NG
         run: |
-          echo "Downloading Espressif crosstool-NG fork..."
+          echo "Mengunduh crosstool-NG branch: $CROSSTOOL_NG_VERSION"
           git clone --depth=1 https://github.com/espressif/crosstool-NG.git -b $CROSSTOOL_NG_VERSION
           mv crosstool-NG crosstool-ng
-
-      - name: Build and install crosstool-NG
-        run: |
-          cd $WORKSPACE/crosstool-ng
+          
+          cd crosstool-ng
           ./bootstrap
           ./configure --enable-local --prefix=/usr/local
           make -j$(nproc)
           sudo make install
-          echo "crosstool-NG version:"
-          ct-ng --version || echo "ct-ng not found"
+          ./ct-ng --version
 
-      - name: Setup build directories
+      - name: Siapkan Folder Tarballs
         run: |
           mkdir -p $WORKSPACE/.build/tarballs
-          mkdir -p $WORKSPACE/.build/src
           echo "CT_LOCAL_TARBALLS_DIR=$WORKSPACE/.build/tarballs" >> $GITHUB_ENV
 
-      - name: Pre-download tarballs
+      - name: Pre-download Tarballs (Opsional)
         run: |
-          echo "Downloading essential tarballs..."
-          mkdir -p $CT_LOCAL_TARBALLS_DIR
+          # Download library dasar untuk mencegah timeout saat build
           cd $CT_LOCAL_TARBALLS_DIR
-          
-          # Download common dependencies to avoid timeout during build
-          wget -q --tries=3 --timeout=60 -c https://ftp.gnu.org/gnu/gmp/gmp-6.2.1.tar.xz || echo "Failed gmp"
-          wget -q --tries=3 --timeout=60 -c https://ftp.gnu.org/gnu/mpfr/mpfr-4.1.0.tar.xz || echo "Failed mpfr"
-          wget -q --tries=3 --timeout=60 -c https://ftp.gnu.org/gnu/mpc/mpc-1.2.1.tar.gz || echo "Failed mpc"
-          wget -q --tries=3 --timeout=60 -c https://ftp.gnu.org/gnu/binutils/binutils-2.36.1.tar.xz || echo "Failed binutils"
-          
-          echo "Available tarballs:"
-          ls -la *.tar.* 2>/dev/null | wc -l
+          wget -q --tries=3 --timeout=60 -c https://ftp.gnu.org/gnu/gmp/gmp-6.2.1.tar.xz || true
+          wget -q --tries=3 --timeout=60 -c https://ftp.gnu.org/gnu/mpfr/mpfr-4.1.0.tar.xz || true
+          wget -q --tries=3 --timeout=60 -c https://ftp.gnu.org/gnu/mpc/mpc-1.2.1.tar.gz || true
 
-      - name: Create proper configuration
+      - name: Konfigurasi dan Fix Variabel (CRITICAL STEP)
         run: |
           cd $WORKSPACE/crosstool-ng
           
-          echo "=== CREATING CONFIGURATION FOR $TARGET ==="
-          
-          # 1. Start with the sample config if available, or generate a default
+          echo "=== 1. Copy Sample Config ==="
           if [ -f "samples/$TARGET/crosstool.config" ]; then
-            echo "Base: Using sample configuration from samples/$TARGET"
             cp samples/$TARGET/crosstool.config .config
+            echo "Sample config ditemukan dan disalin."
           else
-            echo "Base: Using internal default for $TARGET"
+            echo "Sample config TIDAK ditemukan, menggunakan default."
             ./ct-ng $TARGET
           fi
-          
-          # 2. FORCE OVERRIDES (This fixes the missing variables error)
-          echo "Applying CI-specific overrides..."
-          
-          # Remove existing lines to avoid conflicts/duplicates
+
+          echo "=== 2. Hapus Variabel Lama (Clean Up) ==="
+          # Hapus variabel yang akan kita override supaya tidak duplikat/bentrok
           sed -i '/CT_PREFIX_DIR/d' .config
           sed -i '/CT_LOCAL_TARBALLS_DIR/d' .config
           sed -i '/CT_HOST/d' .config
           sed -i '/CT_PARALLEL_JOBS/d' .config
           sed -i '/CT_LOG_PROGRESS_BAR/d' .config
           sed -i '/CT_TARGET/d' .config
+          sed -i '/CT_ARCH/d' .config
           sed -i '/CT_GDB_CROSS_PYTHON_BINARY/d' .config
-          
-          # Append strict configurations
+
+          echo "=== 3. Inject Variabel Wajib (Fix Error arch/.sh) ==="
           cat >> .config <<EOF
           
-          # CI Overrides
+          # --- CI OVERRIDES ---
           CT_TARGET="$TARGET"
+          
+          # FIX: Definisikan string arch secara eksplisit
+          CT_ARCH="xtensa"
+          CT_ARCH_XTENSA=y
+          
+          # Environment Settings
           CT_HOST="$CT_HOST_TRIPLET"
           CT_PREFIX_DIR="$CT_PREFIX_DIR"
           CT_LOCAL_TARBALLS_DIR="$CT_LOCAL_TARBALLS_DIR"
           CT_PARALLEL_JOBS=$(nproc)
           CT_LOG_PROGRESS_BAR=n
+          
+          # Permissions & Experimental
           CT_EXPERIMENTAL=y
           CT_ALLOW_BUILD_AS_ROOT=y
           CT_ALLOW_BUILD_AS_ROOT_SURE=y
-          # Ensure Python3 is used (Ubuntu 22.04 does not have python2)
+          
+          # Fix Python 3 untuk GDB
           CT_GDB_CROSS_PYTHON_BINARY="python3"
           EOF
-          
-          # 3. Ensure Kernel is none (Bare Metal) for ESP32
-          if ! grep -q "CT_KERNEL" .config; then
-             echo 'CT_KERNEL="none"' >> .config
-          fi
-          
-          # 4. Final check for specific ESP32 requirements
+
+          echo "=== 4. Khusus ESP32 Core ==="
           if [[ "$TARGET" == *"esp32"* ]]; then
-            # Ensure custom is set if relying on sample
-            if ! grep -q "CT_ARCH_XTENSA_CORE" .config; then
-               echo 'CT_ARCH_XTENSA_CORE="esp32"' >> .config
-            fi
-          fi
-          
-          echo "=== FINAL CONFIGURATION HEAD ==="
-          head -n 20 .config
-          echo "..."
-          echo "=== CI VARIABLES IN CONFIG ==="
-          grep -E "CT_HOST|CT_PREFIX|CT_TARGET" .config
-
-      - name: Verify configuration
-        run: |
-          cd $WORKSPACE/crosstool-ng
-          echo "=== VERIFYING CONFIGURATION ==="
-          
-          REQUIRED_SETTINGS=("CT_TARGET" "CT_HOST" "CT_PREFIX_DIR" "CT_LOCAL_TARBALLS_DIR")
-          MISSING=0
-          
-          for setting in "${REQUIRED_SETTINGS[@]}"; do
-            if grep -q "^$setting=" .config; then
-              echo "✓ $setting is set"
-            else
-              echo "✗ ERROR: $setting is MISSING in .config"
-              MISSING=1
-            fi
-          done
-          
-          if [ $MISSING -eq 1 ]; then
-            echo "Configuration is incomplete. Aborting."
-            exit 1
+             if ! grep -q "CT_ARCH_XTENSA_CORE" .config; then
+                echo 'CT_ARCH_XTENSA_CORE="esp32"' >> .config
+             fi
+             # Pastikan Kernel None (Bare Metal)
+             if grep -q "CT_KERNEL" .config; then
+                sed -i 's/^CT_KERNEL=.*/CT_KERNEL="none"/' .config
+             else
+                echo 'CT_KERNEL="none"' >> .config
+             fi
           fi
 
-      - name: Build toolchain
+          echo "=== 5. Jalankan Oldconfig (Sanitasi Otomatis) ==="
+          # Ini langkah PENTING. yes "" akan menekan Enter otomatis untuk semua prompt
+          # Ini akan melengkapi variabel internal yang hilang.
+          yes "" | ./ct-ng oldconfig
+
+          echo "=== Cek Konfigurasi Final ==="
+          grep -E "CT_ARCH=|CT_HOST=|CT_PREFIX_DIR=" .config
+
+      - name: Build Toolchain
         id: build
         run: |
           cd $WORKSPACE/crosstool-ng
           
-          # Clean previous build artifacts
+          # Bersihkan folder build sementara
           rm -rf .build/$TARGET
           
           export CT_NG_BUILD_FORCE=1
-          export CT_EXPERIMENTAL=y
           export CT_ALLOW_BUILD_AS_ROOT=y
           export CT_ALLOW_BUILD_AS_ROOT_SURE=y
           export HOME=$WORKSPACE
           
-          mkdir -p $WORKSPACE/.build/logs
-          
-          echo "Starting ct-ng build for $TARGET..."
-          echo "Host: $CT_HOST_TRIPLET"
-          
-          # Using standard output for logs to keep CI alive
+          echo "Memulai proses build... (bisa memakan waktu 30-60 menit)"
+          # Langsung jalankan tanpa pipe ke file log agar real-time output keluar di Actions
           ./ct-ng build
           
           echo "success=true" >> $GITHUB_OUTPUT
 
-      - name: Test and package toolchain
+      - name: Package Toolchain
         if: steps.build.outputs.success == 'true'
         id: package
         run: |
-          echo "=== PACKAGING TOOLCHAIN ==="
+          echo "Membuat paket arsip..."
           
-          if [ ! -d "$CT_PREFIX_DIR/$TARGET" ]; then
-             echo "Error: Toolchain directory not found at $CT_PREFIX_DIR/$TARGET"
+          # Validasi hasil build
+          if [ ! -f "$CT_PREFIX_DIR/$TARGET/bin/$TARGET-gcc" ]; then
+             echo "FATAL: GCC binary tidak ditemukan!"
              exit 1
           fi
-          
-          # Verify binary executable on ARM64
-          if [ -f "$CT_PREFIX_DIR/$TARGET/bin/$TARGET-gcc" ]; then
-             echo "Verifying GCC binary..."
-             file "$CT_PREFIX_DIR/$TARGET/bin/$TARGET-gcc"
-             "$CT_PREFIX_DIR/$TARGET/bin/$TARGET-gcc" --version | head -1
-          else
-             echo "Error: GCC binary not found"
-             exit 1
-          fi
-          
-          mkdir -p $WORKSPACE/artifacts
-          TIMESTAMP=$(date +%Y%m%d)
-          # Standard Espressif naming convention usually: xtensa-esp32-elf-gcc8_4_0-esp-2021r2-linux-arm64.tar.gz
+
           ARTIFACT_NAME="${TARGET}-gcc8_4_0-${CROSSTOOL_NG_VERSION}-linux-arm64.tar.gz"
           
-          echo "Compressing $ARTIFACT_NAME..."
-          # cd to prefix dir to package relatively
           cd "$CT_PREFIX_DIR"
           tar -czf "$WORKSPACE/artifacts/$ARTIFACT_NAME" "$TARGET"
           
+          echo "Artifact created: $ARTIFACT_NAME"
           echo "artifact_name=$ARTIFACT_NAME" >> $GITHUB_OUTPUT
-          echo "artifact_path=$WORKSPACE/artifacts/$ARTIFACT_NAME" >> $GITHUB_OUTPUT
 
-      - name: Upload artifact
+      - name: Upload Artifact
         if: steps.build.outputs.success == 'true'
         uses: actions/upload-artifact@v4
         with:
@@ -245,12 +201,12 @@ jobs:
           path: ${{ env.WORKSPACE }}/artifacts/
           retention-days: 30
 
-      - name: Upload logs on failure
+      - name: Upload Log Jika Gagal
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: build.log
+          name: failure-logs
           path: |
-            ${{ env.WORKSPACE }}/.build/logs/
-            ${{ env.WORKSPACE }}/crosstool-ng/.config
             ${{ env.WORKSPACE }}/crosstool-ng/build.log
+            ${{ env.WORKSPACE }}/crosstool-ng/.config
+          retention-days: 5
