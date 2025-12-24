@@ -186,6 +186,55 @@ jobs:
           # Simpan konfigurasi final
           cp .config "$GITHUB_WORKSPACE/.config-$TARGET-final"
 
+      - name: Download missing tarballs manually (PERBAIKAN UTAMA)
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          cd crosstool-ng
+          
+          # Buat direktori untuk tarball
+          mkdir -p .build/tarballs
+          
+          echo "Downloading required tarballs manually..."
+          
+          # Download komponen yang sering gagal dari mirror yang lebih andal
+          # Daftar tarball yang diperlukan berdasarkan error sebelumnya
+          TARBALLS=(
+            "isl-0.19.tar.xz:https://gcc.gnu.org/pub/gcc/infrastructure/isl-0.19.tar.xz"
+            "zlib-1.2.11.tar.xz:https://zlib.net/zlib-1.2.11.tar.xz"
+            "gmp-6.2.0.tar.xz:https://gmplib.org/download/gmp/gmp-6.2.0.tar.xz"
+            "mpfr-4.0.2.tar.xz:https://www.mpfr.org/mpfr-4.0.2/mpfr-4.0.2.tar.xz"
+            "binutils-2.35.tar.xz:https://ftp.gnu.org/gnu/binutils/binutils-2.35.tar.xz"
+            "gcc-10.2.0.tar.xz:https://ftp.gnu.org/gnu/gcc/gcc-10.2.0/gcc-10.2.0.tar.xz"
+            "newlib-3.3.0.tar.gz:https://sourceware.org/pub/newlib/newlib-3.3.0.tar.gz"
+            "linux-5.4.86.tar.xz:https://cdn.kernel.org/pub/linux/kernel/v5.x/linux-5.4.86.tar.xz"
+          )
+          
+          for tarball_info in "${TARBALLS[@]}"; do
+            filename="${tarball_info%%:*}"
+            url="${tarball_info#*:}"
+            
+            if [ ! -f ".build/tarballs/$filename" ]; then
+              echo "Downloading $filename..."
+              wget -q --tries=3 --timeout=30 -O ".build/tarballs/$filename" "$url" || {
+                echo "Failed to download $filename from $url"
+                echo "Trying alternative source..."
+                # Coba dari GNU mirror
+                wget -q --tries=2 --timeout=20 -O ".build/tarballs/$filename" "https://ftpmirror.gnu.org/${filename}" || true
+              }
+              
+              if [ -f ".build/tarballs/$filename" ]; then
+                echo "  ✓ $filename downloaded"
+                ls -lh ".build/tarballs/$filename"
+              else
+                echo "  ✗ $filename failed to download"
+              fi
+            else
+              echo "  ✓ $filename already exists"
+            fi
+          done
+          
+          echo "Tarball preparation complete"
+
       - name: Build toolchain ${{ matrix.target }}
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
@@ -202,6 +251,16 @@ jobs:
           uname -a
           echo "CPU cores: $(nproc)"
           
+          # Set environment variables untuk mirror yang lebih andal
+          export CT_ISL_MIRROR="https://gcc.gnu.org/pub/gcc/infrastructure"
+          export CT_ZLIB_MIRROR="https://zlib.net"
+          export CT_GMP_MIRROR="https://gmplib.org/download/gmp"
+          export CT_MPFR_MIRROR="https://www.mpfr.org"
+          export CT_BINUTILS_MIRROR="https://ftp.gnu.org/gnu/binutils"
+          export CT_GCC_MIRROR="https://ftp.gnu.org/gnu/gcc"
+          export CT_NEWLIB_MIRROR="https://sourceware.org/pub/newlib"
+          export CT_LINUX_MIRROR="https://cdn.kernel.org/pub/linux/kernel"
+          
           # Build dengan log verbose
           set -x
           ./ct-ng build 2>&1 | tee build-$TARGET.log
@@ -211,9 +270,27 @@ jobs:
           if [ $BUILD_STATUS -eq 0 ]; then
             echo "Build $TARGET SUCCESSFUL!"
           else
-            echo "Build $TARGET FAILED. Last 50 lines of log:"
-            tail -50 build-$TARGET.log
-            exit 1
+            echo "Build $TARGET FAILED. Checking for specific errors..."
+            
+            # Cek error spesifik
+            if grep -q "download failed" build-$TARGET.log; then
+              echo "Download error detected. Trying with local tarballs..."
+              
+              # Tampilkan tarball yang tersedia
+              echo "Available tarballs in .build/tarballs/:"
+              ls -la .build/tarballs/ 2>/dev/null || echo "No tarballs directory"
+              
+              # Coba build lagi dengan skip download
+              echo "Retrying build..."
+              ./ct-ng build 2>&1 | tee build-$TARGET-retry.log || {
+                echo "Retry also failed"
+                exit 1
+              }
+            else
+              echo "Non-download error. Last 50 lines of log:"
+              tail -50 build-$TARGET.log
+              exit 1
+            fi
           fi
 
       - name: Verify and package toolchain
