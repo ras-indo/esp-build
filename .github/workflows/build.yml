@@ -1,130 +1,239 @@
-name: Build crosstool-NG (xtensa-esp32-elf)
+
+name: Build ESP-IDF Toolchains (ARM64 Host) - SUCCESS FINAL
 
 on:
+  push:
+    branches:
+      - 'main'
   workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CROSSTOOL_NG_VERSION: 'esp-2021r2'
+  CT_HOST_TRIPLET: 'aarch64-unknown-linux-gnu'
 
 jobs:
   compile:
-    # gunakan runner yang memang ARM64. Jika hosted ARM64 tersedia di org Anda, ganti sesuai.
-    runs-on: ubuntu-22.04
-
-    env:
-      # HOST runner triplet (where compiler will run)
-      CT_HOST_TRIPLET: aarch64-unknown-linux-gnu
-      # TARGET (what the generated toolchain produces)
-      TARGET: xtensa-esp32-elf
-      # Prefix dir must include target so outputs go to x-tools/<target>
-      CT_PREFIX_DIR: ${{ github.workspace }}/x-tools/${{ env.TARGET }}
-      CROSSTOOL_NG_VERSION: esp-2021r2
-      WORKSPACE: ${{ github.workspace }}
-      CT_LOCAL_TARBALLS_DIR: ${{ github.workspace }}/.build/tarballs
+    runs-on: ubuntu-22.04-arm
+    timeout-minutes: 360
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - xtensa-esp32-elf
 
     steps:
-    - name: Show runner info (sanity)
-      run: |
-        echo "uname -m: $(uname -m)"
-        if [ "$(uname -m)" != "aarch64" ]; then
-          echo "WARNING: runner is not aarch64. This job expects an aarch64 runner (BUILD/HOST = aarch64-unknown-linux-gnu)."
-        fi
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-    - name: Checkout
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 1
+      - name: Bersihkan Workspace
+        run: |
+          echo "Membersihkan workspace..."
+          rm -rf crosstool-ng .build x-tools artifacts
+          mkdir -p x-tools artifacts
 
-    - name: Install build deps
-      run: |
-        sudo apt-get update -y
-        sudo apt-get install -y --no-install-recommends \
-          build-essential autoconf automake bison flex texinfo gawk \
-          libtool libncurses5-dev python3 python3-distutils python3-pip \
-          gperf wget unzip pkg-config ca-certificates cmake cmake-data \
-          libgmp-dev libmpfr-dev libmpc-dev lzip xz-utils rsync bzip2
+      - name: Set Environment Variables
+        run: |
+          echo "TARGET=${{ matrix.target }}" >> $GITHUB_ENV
+          # Pisahkan folder instalasi agar rapi
+          echo "CT_PREFIX_DIR=$GITHUB_WORKSPACE/x-tools/${{ matrix.target }}" >> $GITHUB_ENV
+          echo "CT_HOST_TRIPLET=${{ env.CT_HOST_TRIPLET }}" >> $GITHUB_ENV
+          echo "CROSSTOOL_NG_VERSION=${{ env.CROSSTOOL_NG_VERSION }}" >> $GITHUB_ENV
+          echo "WORKSPACE=$GITHUB_WORKSPACE" >> $GITHUB_ENV
 
-    - name: Prepare workspace dirs
-      run: |
-        rm -rf crosstool-ng .build x-tools artifacts || true
-        mkdir -p crosstool-ng .build x-tools artifacts "${CT_LOCAL_TARBALLS_DIR}"
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential autoconf automake bison flex texinfo help2man gawk \
+            libtool libtool-bin libncurses5-dev libncursesw5-dev \
+            python3 python3-dev python3-distutils python3-pip \
+            git wget unzip pkg-config ca-certificates gperf ninja-build cmake \
+            file bzip2 xz-utils lzip gzip curl rsync \
+            libgmp-dev libmpfr-dev libmpc-dev libexpat1-dev zlib1g-dev \
+            g++ gcc make patch gettext
+          
+          sudo ln -sf /usr/bin/python3 /usr/bin/python || true
 
-    - name: Clone crosstool-NG (esp branch) and init overlays
-      run: |
-        git clone https://github.com/espressif/crosstool-NG.git -b ${CROSSTOOL_NG_VERSION} crosstool-ng
-        cd crosstool-ng
-        git submodule update --init --recursive
-        # ensure overlays folder exists (required by espressif branch)
-        if [ ! -d "overlays/xtensa_esp32" ]; then
-          echo "FATAL: required overlays missing"
-          ls -la overlays || true
-          exit 1
-        fi
-
-    - name: Build & install ct-ng locally
-      run: |
-        cd crosstool-ng
-        ./bootstrap
-        ./configure --enable-local --prefix=/usr/local
-        make -j$(nproc)
-        sudo make install
-
-    - name: Create ct-ng config and adjust for ESP target
-      run: |
-        cd crosstool-ng
-        # create/overwrite .config tailored for target
-        cat > .config <<EOF
-CT_PREFIX_DIR="${CT_PREFIX_DIR}"
-CT_BUILD="${CT_HOST_TRIPLET}"
-CT_HOST="${CT_HOST_TRIPLET}"
-CT_TARGET="${TARGET}"
-EOF
-        # For esp32 ensure arch/core is set (ct-ng expects CT_ARCH_XTENSA_CORE)
-        if [[ "${TARGET}" == *"esp32"* ]]; then
-          if ! grep -q "CT_ARCH_XTENSA_CORE" .config; then
-            echo 'CT_ARCH_XTENSA_CORE="esp32"' >> .config
+      - name: Download & Install crosstool-NG
+        run: |
+          echo "Mengunduh crosstool-NG branch: $CROSSTOOL_NG_VERSION"
+          git clone https://github.com/espressif/crosstool-NG.git -b $CROSSTOOL_NG_VERSION
+          mv crosstool-NG crosstool-ng
+          
+          cd crosstool-ng
+          echo "=== INIT SUBMODULES ==="
+          git submodule update --init --recursive
+          
+          if [ ! -d "overlays/xtensa_esp32" ]; then
+             echo "FATAL: Submodule overlays gagal di-init."
+             exit 1
           fi
-          # ensure no kernel
-          if grep -q "CT_KERNEL" .config; then
-            sed -i 's/^CT_KERNEL=.*/CT_KERNEL="none"/' .config
+          
+          ./bootstrap
+          ./configure --enable-local --prefix=/usr/local
+          make -j$(nproc)
+          sudo make install
+
+      - name: Siapkan Folder Tarballs
+        run: |
+          mkdir -p $WORKSPACE/.build/tarballs
+          echo "CT_LOCAL_TARBALLS_DIR=$WORKSPACE/.build/tarballs" >> $GITHUB_ENV
+
+      - name: Download Manual Library
+        run: |
+          echo "=== DOWNLOAD MANUAL DEPENDENCIES ==="
+          cd $CT_LOCAL_TARBALLS_DIR
+          
+          # ISL Mirror Fix
+          wget --tries=5 --waitretry=5 -O isl-0.19.tar.bz2 https://sources.easybuild.io/i/ISL/isl-0.19.tar.bz2
+          
+          # Cek file lainnya (Optional, ct-ng akan download sendiri jika kurang)
+          if [ ! -s isl-0.19.tar.bz2 ]; then
+             rm -f isl-0.19.tar.bz2
+             wget --tries=5 -O isl-0.19.tar.bz2 https://libisl.sourceforge.io/isl-0.19.tar.bz2
+          fi
+
+      - name: Konfigurasi Toolchain
+        run: |
+          cd $WORKSPACE/crosstool-ng
+          
+          echo "=== Generating Config ==="
+          if [ -f "samples/$TARGET/crosstool.config" ]; then
+            cp samples/$TARGET/crosstool.config .config
           else
-            echo 'CT_KERNEL="none"' >> .config
+            ./ct-ng $TARGET
           fi
-        fi
 
-    - name: Run ct-ng build (non-interactive)
-      run: |
-        cd crosstool-ng
-        rm -rf .build/${TARGET} || true
-        export CT_NG_BUILD_FORCE=1
-        export CT_ALLOW_BUILD_AS_ROOT=y
-        export CT_ALLOW_BUILD_AS_ROOT_SURE=y
-        export HOME=${WORKSPACE}
-        yes "" | ./ct-ng oldconfig || true
-        ./ct-ng build 2>&1 | tee "${WORKSPACE}/x-tools/${TARGET}/build.log" || true
+          # Hapus variabel yang akan kita override
+          sed -i '/CT_PREFIX_DIR/d' .config
+          sed -i '/CT_LOCAL_TARBALLS_DIR/d' .config
+          sed -i '/CT_HOST/d' .config
+          sed -i '/CT_PARALLEL_JOBS/d' .config
+          sed -i '/CT_TARGET/d' .config
+          sed -i '/CT_ARCH/d' .config
+          sed -i '/CT_TARGET_VENDOR/d' .config
+          sed -i '/CT_GDB_CROSS_PYTHON_BINARY/d' .config
+          sed -i '/CT_OVERLAY_LOCATION/d' .config
+          sed -i '/CT_OVERLAY_NAME/d' .config
 
-    - name: Validate generated toolchain (check gcc)
-      run: |
-        GCC_PATH="${CT_PREFIX_DIR}/bin/${TARGET}-gcc"
-        echo "Checking for: $GCC_PATH"
-        if [ ! -x "$GCC_PATH" ]; then
-          echo "FATAL: GCC binary tidak ditemukan di: $GCC_PATH"
-          echo "Isi folder parent:"
-          ls -R "$(dirname "$CT_PREFIX_DIR")" || true
-          # copy build log for debugging
-          if [ -f "${CT_PREFIX_DIR}/build.log" ]; then
-            tail -n 200 "${CT_PREFIX_DIR}/build.log" || true
+          # Inject konfigurasi yang benar
+          cat >> .config <<EOF
+          
+          # CI Overrides
+          CT_TARGET="$TARGET"
+          CT_ARCH="xtensa"
+          CT_ARCH_XTENSA=y
+          
+          # FIX NAMA TUPLE: Set vendor jadi "esp32" agar hasilnya xtensa-esp32-elf-...
+          CT_TARGET_VENDOR="esp32"
+          
+          CT_OVERLAY_NAME="esp32"
+          CT_OVERLAY_LOCATION="$WORKSPACE/crosstool-ng/overlays"
+          
+          CT_HOST="$CT_HOST_TRIPLET"
+          CT_PREFIX_DIR="$CT_PREFIX_DIR"
+          CT_LOCAL_TARBALLS_DIR="$CT_LOCAL_TARBALLS_DIR"
+          
+          CT_PARALLEL_JOBS=$(nproc)
+          CT_LOG_PROGRESS_BAR=n
+          CT_EXPERIMENTAL=y
+          CT_ALLOW_BUILD_AS_ROOT=y
+          CT_ALLOW_BUILD_AS_ROOT_SURE=y
+          CT_GDB_CROSS_PYTHON_BINARY="python3"
+          EOF
+
+          # ESP32 Specific Kernel/Core Fixes
+          if [[ "$TARGET" == *"esp32"* ]]; then
+             if ! grep -q "CT_ARCH_XTENSA_CORE" .config; then
+                echo 'CT_ARCH_XTENSA_CORE="esp32"' >> .config
+             fi
+             if grep -q "CT_KERNEL" .config; then
+                sed -i 's/^CT_KERNEL=.*/CT_KERNEL="none"/' .config
+             else
+                echo 'CT_KERNEL="none"' >> .config
+             fi
           fi
-          exit 1
-        fi
-        $GCC_PATH --version | head -n1
 
-    - name: Package artifact
-      run: |
-        ARTIFACT_NAME="${TARGET}-gcc-${CROSSTOOL_NG_VERSION}-linux-arm64.tar.gz"
-        cd "${GITHUB_WORKSPACE}/x-tools"
-        tar -czf "${GITHUB_WORKSPACE}/artifacts/${ARTIFACT_NAME}" "${TARGET}"
-        echo "artifact_name=${ARTIFACT_NAME}" >> $GITHUB_OUTPUT
+          yes "" | ./ct-ng oldconfig
 
-    - name: Upload artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: toolchain-${{ env.TARGET }}
-        path: artifacts/
+      - name: Build Toolchain
+        id: build
+        run: |
+          cd $WORKSPACE/crosstool-ng
+          
+          rm -rf .build/$TARGET
+          export CT_NG_BUILD_FORCE=1
+          export CT_ALLOW_BUILD_AS_ROOT=y
+          export CT_ALLOW_BUILD_AS_ROOT_SURE=y
+          export HOME=$WORKSPACE
+          
+          echo "Memulai build... (Estimasi: 45-60 menit)"
+          ./ct-ng build
+          
+          echo "success=true" >> $GITHUB_OUTPUT
+
+      - name: Validasi dan Package
+        if: steps.build.outputs.success == 'true'
+        id: package
+        run: |
+          echo "=== VALIDASI HASIL BUILD ==="
+          
+          # Cari folder bin
+          BIN_DIR="$CT_PREFIX_DIR/bin"
+          
+          if [ ! -d "$BIN_DIR" ]; then
+             echo "FATAL: Folder bin tidak ditemukan di $CT_PREFIX_DIR"
+             ls -R "$(dirname "$CT_PREFIX_DIR")"
+             exit 1
+          fi
+          
+          # Cari file GCC secara dinamis (mengantisipasi perbedaan nama tuple)
+          FOUND_GCC=$(find "$BIN_DIR" -name "*-gcc" -type f | head -n 1)
+          
+          if [ -z "$FOUND_GCC" ]; then
+             echo "FATAL: Binary GCC tidak ditemukan di $BIN_DIR"
+             echo "Isi folder bin:"
+             ls -la "$BIN_DIR"
+             exit 1
+          fi
+          
+          echo "✅ Binary GCC ditemukan: $FOUND_GCC"
+          "$FOUND_GCC" --version | head -1
+          
+          # Setup nama artifact
+          ARTIFACT_NAME="${TARGET}-gcc8_4_0-${CROSSTOOL_NG_VERSION}-linux-arm64.tar.gz"
+          
+          echo "Membuat arsip $ARTIFACT_NAME..."
+          # Masuk ke direktori parent dari prefix untuk packaging
+          # Struktur dalam tar.gz akan menjadi: xtensa-esp32-elf/bin/...
+          cd "$GITHUB_WORKSPACE/x-tools"
+          
+          # Kita ambil nama folder target yang sebenarnya dibuat oleh ct-ng
+          ACTUAL_TARGET_DIR=$(basename "$CT_PREFIX_DIR")
+          
+          tar -czf "$WORKSPACE/artifacts/$ARTIFACT_NAME" "$ACTUAL_TARGET_DIR"
+          
+          echo "✅ Artifact berhasil dibuat: $WORKSPACE/artifacts/$ARTIFACT_NAME"
+          echo "artifact_name=$ARTIFACT_NAME" >> $GITHUB_OUTPUT
+
+      - name: Upload Artifact
+        if: steps.build.outputs.success == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}-arm64
+          path: ${{ env.WORKSPACE }}/artifacts/
+          retention-days: 30
+
+      - name: Upload Log Jika Gagal
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failure-logs
+          path: |
+            ${{ env.WORKSPACE }}/crosstool-ng/build.log
+            ${{ env.WORKSPACE }}/crosstool-ng/.config
+          retention-days: 5
