@@ -1,4 +1,5 @@
-name: Build ESP-IDF Toolchains (ARM64 Host) - FINAL SUBMODULE FIX
+
+name: Build ESP-IDF Toolchains (ARM64 Host) - SUCCESS FIX
 
 on:
   push:
@@ -37,7 +38,8 @@ jobs:
       - name: Set Environment Variables
         run: |
           echo "TARGET=${{ matrix.target }}" >> $GITHUB_ENV
-          echo "CT_PREFIX_DIR=$GITHUB_WORKSPACE/x-tools" >> $GITHUB_ENV
+          # FIX 1: Tambahkan nama target ke dalam Prefix Dir agar folder terpisah rapi
+          echo "CT_PREFIX_DIR=$GITHUB_WORKSPACE/x-tools/${{ matrix.target }}" >> $GITHUB_ENV
           echo "CT_HOST_TRIPLET=${{ env.CT_HOST_TRIPLET }}" >> $GITHUB_ENV
           echo "CROSSTOOL_NG_VERSION=${{ env.CROSSTOOL_NG_VERSION }}" >> $GITHUB_ENV
           echo "WORKSPACE=$GITHUB_WORKSPACE" >> $GITHUB_ENV
@@ -54,30 +56,22 @@ jobs:
             libgmp-dev libmpfr-dev libmpc-dev libexpat1-dev zlib1g-dev \
             g++ gcc make patch gettext
           
-          # Fix python3 symlink
           sudo ln -sf /usr/bin/python3 /usr/bin/python || true
 
-      - name: Download & Install crosstool-NG (FIXED)
+      - name: Download & Install crosstool-NG
         run: |
           echo "Mengunduh crosstool-NG branch: $CROSSTOOL_NG_VERSION"
-          # Hapus --depth=1 agar submodule update berjalan lancar tanpa error commit history
           git clone https://github.com/espressif/crosstool-NG.git -b $CROSSTOOL_NG_VERSION
           mv crosstool-NG crosstool-ng
           
           cd crosstool-ng
           
-          echo "=== INITIALIZING SUBMODULES (SOLUSI OVERLAY KOSONG) ==="
-          # INI LANGKAH KRUSIAL YANG HILANG SEBELUMNYA
+          echo "=== INIT SUBMODULES ==="
           git submodule update --init --recursive
           
-          echo "=== DEBUG: CEK ISI FOLDER OVERLAYS ==="
-          ls -la overlays/
-          
           if [ ! -d "overlays/xtensa_esp32" ]; then
-             echo "FATAL: Submodule gagal! overlays/xtensa_esp32 masih tidak ada."
+             echo "FATAL: Submodule gagal!"
              exit 1
-          else
-             echo "✓ SUKSES: Folder overlays/xtensa_esp32 ditemukan."
           fi
           
           ./bootstrap
@@ -90,33 +84,25 @@ jobs:
           mkdir -p $WORKSPACE/.build/tarballs
           echo "CT_LOCAL_TARBALLS_DIR=$WORKSPACE/.build/tarballs" >> $GITHUB_ENV
 
-      - name: Download Manual Library (ISL FIX)
+      - name: Download Manual Library
         run: |
           echo "=== DOWNLOAD MANUAL DEPENDENCIES ==="
           cd $CT_LOCAL_TARBALLS_DIR
           
-          # 1. ISL 0.19 (Penyebab error 404)
           wget --tries=5 --waitretry=5 -O isl-0.19.tar.bz2 https://sources.easybuild.io/i/ISL/isl-0.19.tar.bz2
           
-          # 2. GMP 6.2.0
           if [ ! -f "gmp-6.2.0.tar.xz" ]; then
              wget --tries=5 -O gmp-6.2.0.tar.xz https://ftp.gnu.org/gnu/gmp/gmp-6.2.0.tar.xz
           fi
-          
-          # 3. MPFR 4.0.2
           if [ ! -f "mpfr-4.0.2.tar.xz" ]; then
              wget --tries=5 -O mpfr-4.0.2.tar.xz https://ftp.gnu.org/gnu/mpfr/mpfr-4.0.2.tar.xz
           fi
-          
-          # 4. MPC 1.1.0
           if [ ! -f "mpc-1.1.0.tar.gz" ]; then
              wget --tries=5 -O mpc-1.1.0.tar.gz https://ftp.gnu.org/gnu/mpc/mpc-1.1.0.tar.gz
           fi
 
-          # Validasi ISL
           if [ ! -s isl-0.19.tar.bz2 ] || [ $(stat -c%s "isl-0.19.tar.bz2") -lt 100000 ]; then
              rm -f isl-0.19.tar.bz2
-             # Link cadangan
              wget --tries=5 -O isl-0.19.tar.bz2 https://libisl.sourceforge.io/isl-0.19.tar.bz2
           fi
 
@@ -124,14 +110,13 @@ jobs:
         run: |
           cd $WORKSPACE/crosstool-ng
           
-          echo "=== 1. Load Sample Config ==="
           if [ -f "samples/$TARGET/crosstool.config" ]; then
             cp samples/$TARGET/crosstool.config .config
           else
             ./ct-ng $TARGET
           fi
 
-          echo "=== 2. Hapus Variabel Lama ==="
+          # Clean variables
           sed -i '/CT_PREFIX_DIR/d' .config
           sed -i '/CT_LOCAL_TARBALLS_DIR/d' .config
           sed -i '/CT_HOST/d' .config
@@ -142,38 +127,25 @@ jobs:
           sed -i '/CT_OVERLAY_LOCATION/d' .config
           sed -i '/CT_OVERLAY_NAME/d' .config
 
-          echo "=== 3. Inject Variabel ==="
+          # Inject config
           cat >> .config <<EOF
           
-          # --- CI CONFIGURATION ---
           CT_TARGET="$TARGET"
-          
-          # Fix Arsitektur
           CT_ARCH="xtensa"
           CT_ARCH_XTENSA=y
-          
-          # FIX OVERLAY:
-          # Folder di disk sekarang ada: "overlays/xtensa_esp32"
-          # Kita set "esp32", script akan mencari "xtensa_" + "esp32" = "xtensa_esp32"
-          # Ini akan COCOK sekarang.
           CT_OVERLAY_NAME="esp32"
           CT_OVERLAY_LOCATION="$WORKSPACE/crosstool-ng/overlays"
-          
-          # Environment
           CT_HOST="$CT_HOST_TRIPLET"
           CT_PREFIX_DIR="$CT_PREFIX_DIR"
           CT_LOCAL_TARBALLS_DIR="$CT_LOCAL_TARBALLS_DIR"
           CT_PARALLEL_JOBS=$(nproc)
           CT_LOG_PROGRESS_BAR=n
-          
-          # Izin & Python
           CT_EXPERIMENTAL=y
           CT_ALLOW_BUILD_AS_ROOT=y
           CT_ALLOW_BUILD_AS_ROOT_SURE=y
           CT_GDB_CROSS_PYTHON_BINARY="python3"
           EOF
 
-          echo "=== 4. Khusus ESP32 Core ==="
           if [[ "$TARGET" == *"esp32"* ]]; then
              if ! grep -q "CT_ARCH_XTENSA_CORE" .config; then
                 echo 'CT_ARCH_XTENSA_CORE="esp32"' >> .config
@@ -185,7 +157,6 @@ jobs:
              fi
           fi
 
-          echo "=== 5. Jalankan Oldconfig ==="
           yes "" | ./ct-ng oldconfig
 
       - name: Build Toolchain
@@ -204,17 +175,29 @@ jobs:
           
           echo "success=true" >> $GITHUB_OUTPUT
 
-      - name: Package Toolchain
+      - name: Package Toolchain (FIXED PATH)
         if: steps.build.outputs.success == 'true'
         id: package
         run: |
-          if [ ! -f "$CT_PREFIX_DIR/$TARGET/bin/$TARGET-gcc" ]; then
-             echo "FATAL: GCC binary tidak ditemukan!"
+          echo "=== VALIDASI DAN PACKAGING ==="
+          
+          # FIX 2: Path binari sekarang ada di dalam subfolder Prefix
+          GCC_PATH="$CT_PREFIX_DIR/bin/$TARGET-gcc"
+          
+          if [ ! -f "$GCC_PATH" ]; then
+             echo "FATAL: GCC binary tidak ditemukan di: $GCC_PATH"
+             echo "Isi folder parent:"
+             ls -R "$(dirname "$CT_PREFIX_DIR")"
              exit 1
           fi
+          
+          echo "Binary ditemukan: $GCC_PATH"
+          $GCC_PATH --version | head -1
 
           ARTIFACT_NAME="${TARGET}-gcc8_4_0-${CROSSTOOL_NG_VERSION}-linux-arm64.tar.gz"
-          cd "$CT_PREFIX_DIR"
+          
+          # FIX 3: Masuk ke root x-tools untuk men-tar folder target
+          cd "$GITHUB_WORKSPACE/x-tools"
           tar -czf "$WORKSPACE/artifacts/$ARTIFACT_NAME" "$TARGET"
           
           echo "artifact_name=$ARTIFACT_NAME" >> $GITHUB_OUTPUT
