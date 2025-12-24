@@ -1,4 +1,4 @@
-name: Build ESP-IDF Toolchains (ARM64 Host) - FIXED MIRROR
+name: Build ESP-IDF Toolchains (ARM64 Host) - MANUAL DOWNLOAD FIX
 
 on:
   push:
@@ -16,7 +16,7 @@ env:
 jobs:
   compile:
     runs-on: ubuntu-22.04-arm
-    timeout-minutes: 360 # Build toolchain lama butuh waktu lama
+    timeout-minutes: 360
     
     strategy:
       fail-fast: false
@@ -54,7 +54,7 @@ jobs:
             libgmp-dev libmpfr-dev libmpc-dev libexpat1-dev zlib1g-dev \
             g++ gcc make patch gettext
           
-          # Fix: Pastikan command 'python' mengarah ke python3
+          # Fix python3 symlink
           sudo ln -sf /usr/bin/python3 /usr/bin/python || true
 
       - name: Download & Install crosstool-NG
@@ -68,44 +68,78 @@ jobs:
           ./configure --enable-local --prefix=/usr/local
           make -j$(nproc)
           sudo make install
-          ./ct-ng --version
 
       - name: Siapkan Folder Tarballs
         run: |
           mkdir -p $WORKSPACE/.build/tarballs
           echo "CT_LOCAL_TARBALLS_DIR=$WORKSPACE/.build/tarballs" >> $GITHUB_ENV
 
-      - name: Konfigurasi Smart Mirror & Fixes
+      - name: Download Manual Library (ANTI GAGAL)
+        run: |
+          echo "=== DOWNLOAD MANUAL DEPENDENCIES ==="
+          # Kita download file yang gagal (ISL) dan taruh di folder yang benar.
+          # CT-NG akan mendeteksi file ini dan skip proses download internalnya.
+          
+          cd $CT_LOCAL_TARBALLS_DIR
+          
+          # 1. ISL 0.19 (Penyebab Utama Error)
+          # Menggunakan mirror GNU GCC yang sangat stabil
+          echo "Downloading isl-0.19.tar.bz2..."
+          wget --tries=5 --waitretry=5 -O isl-0.19.tar.bz2 https://gcc.gnu.org/pub/gcc/infrastructure/isl-0.19.tar.bz2
+          
+          # 2. GMP 6.2.0 (Sesuai Log)
+          if [ ! -f "gmp-6.2.0.tar.xz" ]; then
+             echo "Downloading gmp-6.2.0.tar.xz..."
+             wget --tries=5 -O gmp-6.2.0.tar.xz https://ftp.gnu.org/gnu/gmp/gmp-6.2.0.tar.xz
+          fi
+          
+          # 3. MPFR 4.0.2 (Sesuai Log)
+          if [ ! -f "mpfr-4.0.2.tar.xz" ]; then
+             echo "Downloading mpfr-4.0.2.tar.xz..."
+             wget --tries=5 -O mpfr-4.0.2.tar.xz https://ftp.gnu.org/gnu/mpfr/mpfr-4.0.2.tar.xz
+          fi
+          
+          # 4. MPC 1.1.0 (Estimasi, tapi aman didownload)
+          if [ ! -f "mpc-1.1.0.tar.gz" ]; then
+             echo "Downloading mpc-1.1.0.tar.gz..."
+             wget --tries=5 -O mpc-1.1.0.tar.gz https://ftp.gnu.org/gnu/mpc/mpc-1.1.0.tar.gz
+          fi
+
+          echo "=== Cek File Tarballs ==="
+          ls -la
+          # Pastikan ukurannya wajar (tidak 0 bytes)
+          if [ ! -s isl-0.19.tar.bz2 ]; then
+            echo "ERROR: Download ISL Gagal (File kosong)"
+            exit 1
+          fi
+
+      - name: Konfigurasi Toolchain
         run: |
           cd $WORKSPACE/crosstool-ng
           
           echo "=== 1. Load Sample Config ==="
           if [ -f "samples/$TARGET/crosstool.config" ]; then
             cp samples/$TARGET/crosstool.config .config
-            echo "Sample config dimuat."
           else
-            echo "Sample tidak ditemukan, load default."
             ./ct-ng $TARGET
           fi
 
-          echo "=== 2. Bersihkan Variabel Lama ==="
-          # Hapus variabel yang akan kita override agar tidak bentrok
+          echo "=== 2. Hapus Variabel Lama ==="
           sed -i '/CT_PREFIX_DIR/d' .config
           sed -i '/CT_LOCAL_TARBALLS_DIR/d' .config
           sed -i '/CT_HOST/d' .config
           sed -i '/CT_PARALLEL_JOBS/d' .config
           sed -i '/CT_TARGET/d' .config
           sed -i '/CT_ARCH/d' .config
-          sed -i '/CT_PRE_MIRROR_URLS/d' .config 
           sed -i '/CT_GDB_CROSS_PYTHON_BINARY/d' .config
 
-          echo "=== 3. Inject Variabel & Mirror Fix ==="
+          echo "=== 3. Inject Variabel ==="
           cat >> .config <<EOF
           
           # --- CI CONFIGURATION ---
           CT_TARGET="$TARGET"
           
-          # Fix Arsitektur (mencegah error arch/.sh)
+          # Fix Arsitektur
           CT_ARCH="xtensa"
           CT_ARCH_XTENSA=y
           
@@ -121,12 +155,6 @@ jobs:
           CT_ALLOW_BUILD_AS_ROOT=y
           CT_ALLOW_BUILD_AS_ROOT_SURE=y
           CT_GDB_CROSS_PYTHON_BINARY="python3"
-
-          # --- MIRROR SETTINGS (SOLUSI DOWNLOAD) ---
-          # Mirror infrastruktur GCC. Sangat stabil.
-          # Berisi: isl, gmp, mpfr, mpc, zlib.
-          CT_PRE_MIRROR_URLS="https://gcc.gnu.org/pub/gcc/infrastructure/"
-          
           EOF
 
           echo "=== 4. Khusus ESP32 Core ==="
@@ -134,7 +162,6 @@ jobs:
              if ! grep -q "CT_ARCH_XTENSA_CORE" .config; then
                 echo 'CT_ARCH_XTENSA_CORE="esp32"' >> .config
              fi
-             # Pastikan Kernel = None (Bare Metal)
              if grep -q "CT_KERNEL" .config; then
                 sed -i 's/^CT_KERNEL=.*/CT_KERNEL="none"/' .config
              else
@@ -142,11 +169,8 @@ jobs:
              fi
           fi
 
-          echo "=== 5. Jalankan Oldconfig (Sanitasi) ==="
-          # Otomatis melengkapi config internal
+          echo "=== 5. Jalankan Oldconfig ==="
           yes "" | ./ct-ng oldconfig
-          
-          echo "Konfigurasi Selesai."
 
       - name: Build Toolchain
         id: build
@@ -162,7 +186,6 @@ jobs:
           export HOME=$WORKSPACE
           
           echo "Memulai build... (Estimasi: 45-60 menit)"
-          # Jalankan tanpa pipe agar output keluar real-time
           ./ct-ng build
           
           echo "success=true" >> $GITHUB_OUTPUT
@@ -171,20 +194,15 @@ jobs:
         if: steps.build.outputs.success == 'true'
         id: package
         run: |
-          echo "=== PACKAGING ==="
-          
           if [ ! -f "$CT_PREFIX_DIR/$TARGET/bin/$TARGET-gcc" ]; then
              echo "FATAL: GCC binary tidak ditemukan!"
              exit 1
           fi
 
-          # Nama file standar: xtensa-esp32-elf-gcc8_4_0-esp-2021r2-linux-arm64.tar.gz
           ARTIFACT_NAME="${TARGET}-gcc8_4_0-${CROSSTOOL_NG_VERSION}-linux-arm64.tar.gz"
-          
           cd "$CT_PREFIX_DIR"
           tar -czf "$WORKSPACE/artifacts/$ARTIFACT_NAME" "$TARGET"
           
-          echo "Artifact created: $ARTIFACT_NAME"
           echo "artifact_name=$ARTIFACT_NAME" >> $GITHUB_OUTPUT
 
       - name: Upload Artifact
