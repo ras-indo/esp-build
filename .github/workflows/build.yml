@@ -97,9 +97,7 @@ jobs:
           if [ ! -d "$GITHUB_WORKSPACE/overlays/xtensa_esp32" ] && [[ "$TARGET" == "xtensa-esp32-elf" ]]; then
             echo "Creating minimal overlay for xtensa-esp32-elf"
             mkdir -p "$GITHUB_WORKSPACE/overlays/xtensa_esp32"
-            cat > "$GITHUB_WORKSPACE/overlays/xtensa_esp32/README" << 'EOF'
-Minimal overlay for xtensa-esp32-elf
-EOF
+            echo "Minimal overlay for xtensa-esp32-elf" > "$GITHUB_WORKSPACE/overlays/xtensa_esp32/README"
           fi
 
       - name: Create configuration for ${{ matrix.target }}
