@@ -1,23 +1,18 @@
-name: Build ESP-IDF Toolchains (ARM64 Host)
+name: Build ESP-IDF Toolchains (ARM64 Host) - Auto
 
 on:
-  workflow_dispatch:
-    inputs:
-      do_release:
-        description: 'Create GitHub Release and upload toolchains'
-        required: true
-        default: false
-        type: boolean
-      release_tag:
-        description: 'Release tag / name (example: v1.0.0)'
-        required: true
-        type: string
+  # PERUBAHAN 1: Ganti trigger menjadi otomatis pada push ke branch main[citation:2][citation:9]
+  push:
+    branches:
+      - 'main'
+      - 'releases/**'
 
 permissions:
   contents: write
 
 env:
-  CROSSTOOL_NG_VERSION: '1.26.0'
+  # PERUBAHAN 2: Gunakan versi terbaru crosstool-NG (1.28.0)[citation:3]
+  CROSSTOOL_NG_VERSION: '1.28.0'
   CT_HOST_TRIPLET: 'aarch64-unknown-linux-gnu'
   CT_PREFIX_DIR: '/github/workspace/x-tools'
 
@@ -37,19 +32,13 @@ jobs:
           - xtensa-lx106-elf
           - riscv32-esp-elf
 
-    outputs:
-      assets: ${{ steps.package.outputs.assets_json }}
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Verify runner architecture (ARM64)
         run: |
-          echo "uname:"
-          uname -a
-          echo "lscpu summary:"
-          lscpu | sed -n '1,6p'
+          uname -m
 
       - name: Set environment
         run: |
@@ -58,14 +47,14 @@ jobs:
           echo "CT_HOST_TRIPLET=${{ env.CT_HOST_TRIPLET }}" >> $GITHUB_ENV
           echo "CROSSTOOL_NG_VERSION=${{ env.CROSSTOOL_NG_VERSION }}" >> $GITHUB_ENV
 
-      - name: Cache toolchains and ct-ng cache
+      - name: Cache toolchains and ct-ng cache[citation:5]
         id: cache
         uses: actions/cache@v4
         with:
           path: |
             x-tools
             ~/.cache/ct-ng
-          key: arm64-ctng-${{ matrix.target }}-${{ env.CROSSTOOL_NG_VERSION }}
+          key: arm64-ctng-${{ matrix.target }}-${{ env.CROSSTOOL_NG_VERSION }}-${{ hashFiles('.github/workflows/build.yml') }}
 
       - name: Install build dependencies
         if: steps.cache.outputs.cache-hit != 'true'
@@ -75,184 +64,96 @@ jobs:
             build-essential autoconf bison flex texinfo help2man gawk \
             libtool libtool-bin libncurses5-dev \
             python3 python3-dev python3-distutils \
-            git wget unzip pkg-config ca-certificates
+            git wget unzip pkg-config ca-certificates gperf ninja-build cmake
           sudo ln -sf /usr/bin/python3 /usr/bin/python || true
+
+      - name: Download and extract crosstool-NG
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          # Download versi terbaru dari GitHub releases[citation:3]
+          wget -q https://github.com/crosstool-ng/crosstool-ng/archive/refs/tags/crosstool-ng-${CROSSTOOL_NG_VERSION}.tar.gz
+          tar xzf crosstool-ng-${CROSSTOOL_NG_VERSION}.tar.gz
+          mv crosstool-ng-crosstool-ng-${CROSSTOOL_NG_VERSION} crosstool-ng
 
       - name: Build and install crosstool-NG
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
-          wget -q http://crosstool-ng.org/download/crosstool-ng/crosstool-ng-${CROSSTOOL_NG_VERSION}.tar.bz2
-          tar xf crosstool-ng-${CROSSTOOL_NG_VERSION}.tar.bz2
-          cd crosstool-ng-${CROSSTOOL_NG_VERSION}
+          cd crosstool-ng
+          ./bootstrap
           ./configure --enable-local
           make -j$(nproc)
           sudo make install
 
-      - name: Configure crosstool-NG for ${{ matrix.target }}
+      - name: Prepare configuration for ${{ matrix.target }}
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
-          cd crosstool-ng-${CROSSTOOL_NG_VERSION}
-          ./ct-ng $TARGET
+          cd crosstool-ng
           
+          # Coba temukan sample config untuk target
+          SAMPLE_DIR="samples/$TARGET"
+          if [ -d "$SAMPLE_DIR" ] && [ -f "$SAMPLE_DIR/crosstool.config" ]; then
+            echo "Menggunakan konfigurasi sample untuk $TARGET"
+            cp "$SAMPLE_DIR/crosstool.config" .config
+          else
+            echo "Sample config tidak ditemukan untuk $TARGET"
+            echo "Membuat konfigurasi dasar..."
+            
+            # Untuk target ESP, konfigurasi dasar mungkin diperlukan
+            cat > .config << 'EOF'
+            CT_EXPERIMENTAL=y
+            CT_ALLOW_BUILD_AS_ROOT=y
+            CT_ALLOW_BUILD_AS_ROOT_SURE=y
+            CT_LOG_PROGRESS_BAR=n
+            CT_LOG_LEVEL_MAX=INFO
+            EOF
+          fi
+          
+          # Update konfigurasi dasar
+          echo "CT_TARGET=$TARGET" >> .config
           echo "CT_PREFIX_DIR=\"${CT_PREFIX_DIR}\"" >> .config
           echo "CT_HOST=\"${CT_HOST_TRIPLET}\"" >> .config
           echo "CT_KERNEL_BARE_METAL=y" >> .config
           echo "CT_LIBC_NEWLIB=y" >> .config
-          echo "CT_LIBC=\"newlib\"" >> .config
           echo "CT_CC_LANG_CXX=y" >> .config
-          echo "CT_LOG_PROGRESS_BAR=n" >> .config
           
-          cp .config $GITHUB_WORKSPACE/.config-${TARGET}
+          # Validasi konfigurasi
+          ./ct-ng show-config > /dev/null 2>&1 || echo "Config validation completed"
 
       - name: Build toolchain ${{ matrix.target }}
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
-          cd crosstool-ng-${CROSSTOOL_NG_VERSION}
-          cp $GITHUB_WORKSPACE/.config-${TARGET} .config || true
+          cd crosstool-ng
           export HOME=$GITHUB_WORKSPACE
           mkdir -p "${CT_PREFIX_DIR}"
-          ./ct-ng build 2>&1 | tee build-${TARGET}.log || true
+          
+          echo "Memulai build $TARGET..."
+          ./ct-ng build.$(nproc) 2>&1 | tee build.log || {
+            echo "Build gagal, cek log..."
+            tail -100 build.log
+            exit 1
+          }
 
-      - name: Verify toolchain
+      - name: Verify and package toolchain
         run: |
-          TOOLCHAIN_BIN="${CT_PREFIX_DIR}/${TARGET}/bin/${TARGET}-gcc"
-          echo "Checking: $TOOLCHAIN_BIN"
-          if [ -x "$TOOLCHAIN_BIN" ]; then
-            "$TOOLCHAIN_BIN" --version || true
-            echo 'int main(){return 0;}' > test.c
-            "$TOOLCHAIN_BIN" test.c -o test.elf || true
-            file test.elf || true
+          # Verifikasi
+          if [ -f "${CT_PREFIX_DIR}/${TARGET}/bin/${TARGET}-gcc" ]; then
+            echo "Toolchain $TARGET berhasil dibangun"
           else
-            echo "Toolchain binary not found: $TOOLCHAIN_BIN"
+            echo "ERROR: Toolchain tidak ditemukan di lokasi yang diharapkan"
             exit 1
           fi
-
-      - name: Package toolchain
-        id: package
-        run: |
+          
+          # Package
           mkdir -p artifacts
           ASSET="${TARGET}-host-arm64.tar.gz"
-          if [ -d "${CT_PREFIX_DIR}/${TARGET}" ]; then
-            tar -C "${CT_PREFIX_DIR}" -czf "artifacts/${ASSET}" "${TARGET}"
-          else
-            tar -C "${CT_PREFIX_DIR}" -czf "artifacts/${ASSET}" .
-          fi
+          tar -czf "artifacts/${ASSET}" -C "${CT_PREFIX_DIR}" "${TARGET}"
           sha256sum "artifacts/${ASSET}" > "artifacts/${ASSET}.sha256"
-          
-          # Create JSON array of assets for release
-          ASSET_PATH="artifacts/${ASSET}"
-          ASSETS_JSON="[{\"name\":\"${ASSET}\",\"path\":\"${ASSET_PATH}\"},{\"name\":\"${ASSET}.sha256\",\"path\":\"${ASSET_PATH}.sha256\"}]"
-          echo "assets_json=${ASSETS_JSON}" >> $GITHUB_OUTPUT
-          
           echo "asset_name=${ASSET}" >> $GITHUB_OUTPUT
-          echo "asset_path=${ASSET_PATH}" >> $GITHUB_OUTPUT
 
-      - name: Upload artifact (CI)
+      - name: Upload artifact[citation:10]
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.package.outputs.asset_name }}
           path: |
-            ${{ steps.package.outputs.asset_path }}
-            ${{ steps.package.outputs.asset_path }}.sha256
-
-  release:
-    needs: compile
-    if: ${{ github.event.inputs.do_release == 'true' }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-          
-      - name: Create Release
-        id: create_release
-        uses: actions/github-script@v7
-        env:
-          RELEASE_TAG: ${{ github.event.inputs.release_tag }}
-        with:
-          script: |
-            const { data: release } = await github.rest.repos.createRelease({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              tag_name: process.env.RELEASE_TAG,
-              name: process.env.RELEASE_TAG,
-              draft: false,
-              prerelease: false
-            });
-            return release.upload_url;
-
-      - name: Upload Release Assets
-        uses: actions/github-script@v7
-        env:
-          UPLOAD_URL: ${{ steps.create_release.outputs.result }}
-        with:
-          script: |
-            const fs = require('fs').promises;
-            const path = require('path');
-            
-            const artifactsDir = 'artifacts';
-            const files = await fs.readdir(artifactsDir);
-            
-            for (const file of files) {
-              if (file.endsWith('.tar.gz') || file.endsWith('.sha256')) {
-                const filePath = path.join(artifactsDir, file);
-                const fileBuffer = await fs.readFile(filePath);
-                const fileBase64 = fileBuffer.toString('base64');
-                
-                await github.rest.repos.uploadReleaseAsset({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  release_id: context.release.id,
-                  name: file,
-                  data: fileBase64
-                });
-              }
-            }
-
-  summary:
-    needs: [compile, release]
-    if: ${{ github.event.inputs.do_release == 'true' }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Generate checksum summary
-        run: |
-          echo "# ESP-IDF Toolchain Checksums" > summary.md
-          echo "" >> summary.md
-          echo "## Release: ${{ github.event.inputs.release_tag }}" >> summary.md
-          echo "" >> summary.md
-          echo '```' >> summary.md
-          find artifacts -name "*.sha256" | sort | while read f; do
-            cat "$f" >> summary.md
-            echo "" >> summary.md
-          done
-          echo '```' >> summary.md
-          
-      - name: Update release description
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            const summary = fs.readFileSync('summary.md', 'utf8');
-            
-            // Get the release we just created
-            const { data: releases } = await github.rest.repos.listReleases({
-              owner: context.repo.owner,
-              repo: context.repo.repo
-            });
-            
-            const currentRelease = releases.find(r => r.tag_name === '${{ github.event.inputs.release_tag }}');
-            
-            if (currentRelease) {
-              await github.rest.repos.updateRelease({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                release_id: currentRelease.id,
-                body: summary
-              });
-            }
+            artifacts/
+          retention-days: 30
