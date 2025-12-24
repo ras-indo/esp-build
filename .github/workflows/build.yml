@@ -1,9 +1,10 @@
-name: Build ESP-IDF Toolchains (ARM64 Host) - Auto Fix
+name: Build ESP-IDF Toolchains (ARM64 Host) - Fixed
 
 on:
   push:
     branches:
       - 'main'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -23,6 +24,9 @@ jobs:
       matrix:
         target:
           - xtensa-esp32-elf
+          - xtensa-esp32s2-elf
+          - xtensa-esp32s3-elf
+          - riscv32-esp-elf
 
     steps:
       - name: Checkout repository
@@ -31,7 +35,7 @@ jobs:
       - name: Clean workspace dari konfigurasi lama
         run: |
           echo "Membersihkan workspace dari konfigurasi lama..."
-          rm -rf crosstool-ng crosstool-NG .config* x-tools overlays
+          rm -rf crosstool-ng crosstool-NG .config* x-tools overlays .build
           mkdir -p x-tools
 
       - name: Set environment variables
@@ -40,17 +44,20 @@ jobs:
           echo "CT_PREFIX_DIR=$GITHUB_WORKSPACE/x-tools" >> $GITHUB_ENV
           echo "CT_HOST_TRIPLET=${{ env.CT_HOST_TRIPLET }}" >> $GITHUB_ENV
           echo "CROSSTOOL_NG_VERSION=${{ env.CROSSTOOL_NG_VERSION }}" >> $GITHUB_ENV
+          echo "WORKSPACE=$GITHUB_WORKSPACE" >> $GITHUB_ENV
 
       - name: Install dependencies build
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential autoconf bison flex texinfo help2man gawk \
-            libtool libtool-bin libncurses5-dev \
-            python3 python3-dev python3-distutils \
+            libtool libtool-bin libncurses5-dev libncursesw5-dev \
+            python3 python3-dev python3-distutils python3-pip \
             git wget unzip pkg-config ca-certificates gperf ninja-build cmake \
-            file bzip2 xz-utils unzip
+            file bzip2 xz-utils lzip gzip curl rsync \
+            libgmp-dev libmpfr-dev libmpc-dev
           sudo ln -sf /usr/bin/python3 /usr/bin/python || true
+          sudo pip3 install --upgrade pip
 
       - name: Download dan setup crosstool-NG (Fork Espressif)
         run: |
@@ -58,178 +65,224 @@ jobs:
           git clone --depth=1 https://github.com/espressif/crosstool-NG.git -b $CROSSTOOL_NG_VERSION
           mv crosstool-NG crosstool-ng
           echo "Fork Espressif $CROSSTOOL_NG_VERSION siap"
+          
+          # Verifikasi clone
+          cd crosstool-ng
+          git log -1 --oneline
+          echo "Samples yang tersedia:"
+          ls samples/ | grep -i esp || echo "Tidak ada sample ESP"
 
       - name: Build dan install crosstool-NG
         run: |
           cd crosstool-ng
           ./bootstrap
-          ./configure --enable-local
+          ./configure --enable-local --prefix=/usr/local
           make -j$(nproc)
           sudo make install
           echo "crosstool-NG terinstall"
+          ct-ng --version
 
-      - name: Pre-download SEMUA tarball yang diperlukan
+      - name: Setup workspace untuk build toolchain
         run: |
-          echo "PRE-DOWNLOAD SEMUA TARBALL KE CACHE LOKAL..."
-          mkdir -p crosstool-ng/.build/tarballs
-          cd crosstool-ng/.build/tarballs
+          echo "Setup workspace..."
+          mkdir -p $WORKSPACE/.build/tarballs
+          mkdir -p $WORKSPACE/.build/src
+          mkdir -p $WORKSPACE/.build/logs
           
-          wget -q --tries=3 --timeout=60 https://gcc.gnu.org/pub/gcc/infrastructure/isl-0.22.tar.xz && echo "✓ isl-0.22" || echo "✗ isl-0.22"
-          wget -q --tries=3 --timeout=60 https://zlib.net/zlib-1.2.11.tar.xz && echo "✓ zlib-1.2.11" || echo "✗ zlib-1.2.11"
-          wget -q --tries=3 --timeout=60 https://gmplib.org/download/gmp/gmp-6.2.0.tar.xz && echo "✓ gmp-6.2.0" || echo "✗ gmp-6.2.0"
-          wget -q --tries=3 --timeout=60 https://www.mpfr.org/mpfr-4.0.2/mpfr-4.0.2.tar.xz && echo "✓ mpfr-4.0.2" || echo "✗ mpfr-4.0.2"
-          wget -q --tries=3 --timeout=60 https://ftp.gnu.org/gnu/mpc/mpc-1.1.0.tar.gz && echo "✓ mpc-1.1.0" || echo "✗ mpc-1.1.0"
+          # Set environment variables untuk ct-ng
+          echo "CT_LOCAL_TARBALLS_DIR=$WORKSPACE/.build/tarballs" >> $GITHUB_ENV
+          echo "CT_WORK_DIR=$WORKSPACE/.build" >> $GITHUB_ENV
+
+      - name: Pre-download tarball yang diperlukan
+        run: |
+          echo "PRE-DOWNLOAD TARBALL KE CACHE LOKAL..."
+          mkdir -p $WORKSPACE/.build/tarballs
+          cd $WORKSPACE/.build/tarballs
+          
+          # Download tarball yang umum digunakan
+          TARBALLS=(
+            "https://ftp.gnu.org/gnu/gmp/gmp-6.2.1.tar.xz"
+            "https://ftp.gnu.org/gnu/mpfr/mpfr-4.1.0.tar.xz"
+            "https://ftp.gnu.org/gnu/mpc/mpc-1.2.1.tar.gz"
+            "https://ftp.gnu.org/gnu/binutils/binutils-2.36.1.tar.xz"
+            "https://ftp.gnu.org/gnu/gcc/gcc-8.4.0/gcc-8.4.0.tar.xz"
+            "https://sourceware.org/pub/newlib/newlib-3.3.0.tar.gz"
+            "https://ftp.gnu.org/gnu/gdb/gdb-9.2.tar.xz"
+          )
+          
+          for url in "${TARBALLS[@]}"; do
+            filename=$(basename "$url")
+            echo "Downloading $filename..."
+            wget -q --tries=3 --timeout=120 -c "$url" || echo "Failed to download $filename"
+          done
           
           echo "Tarball yang tersedia:"
           ls -la *.tar.* 2>/dev/null | wc -l
 
-      - name: BUAT KONFIGURASI SEDERHANA TANPA COMPLEXITY
+      - name: Konfigurasi toolchain menggunakan sample ESP
         run: |
-          cd crosstool-ng
+          cd $WORKSPACE/crosstool-ng
           
-          echo "=== STRATEGI BARU: Minimal Configuration ==="
-          echo "1. Reset total..."
-          rm -f .config .config.old .config.bak
+          echo "=== MENGGUNAKAN SAMPLE KONFIGURASI ESP ==="
           
-          echo "2. Gunakan ct-ng untuk pilih target..."
-          ./ct-ng $TARGET 2>&1 | grep -v "deprecated\|warning" || true
+          # Cek apakah sample untuk target kita ada
+          if [ -f "samples/$TARGET/crosstool.config" ]; then
+            echo "Menggunakan sample konfigurasi dari crosstool-NG untuk $TARGET"
+            cp samples/$TARGET/crosstool.config .config
+          else
+            echo "Sample untuk $TARGET tidak ditemukan, menggunakan ct-ng untuk generate"
+            ./ct-ng $TARGET
+          fi
           
+          # Pastikan konfigurasi ada
           if [ ! -f .config ]; then
-            echo "ct-ng $TARGET gagal, buat manual..."
-            # PERBAIKAN: Ganti heredoc dengan echo
-            echo "CT_EXPERIMENTAL=y" > .config
-            echo "CT_ALLOW_BUILD_AS_ROOT=y" >> .config
-            echo "CT_ALLOW_BUILD_AS_ROOT_SURE=y" >> .config
-            echo "CT_LOG_PROGRESS_BAR=n" >> .config
-            echo "CT_KERNEL_BARE_METAL=y" >> .config
-            echo "CT_LIBC_NEWLIB=y" >> .config
-            echo "CT_CC_LANG_CXX=y" >> .config
-            echo "CT_DEBUG_GDB=y" >> .config
+            echo "ERROR: Konfigurasi tidak berhasil dibuat!"
+            exit 1
           fi
           
-          echo "3. PAKSA SETEL TARGET dengan sed..."
-          sed -i '/CT_TARGET/d' .config
-          echo "CT_TARGET=\"$TARGET\"" >> .config
+          # Update konfigurasi dengan path yang benar
+          echo "Memperbarui konfigurasi..."
+          sed -i "s|CT_PREFIX_DIR=.*|CT_PREFIX_DIR=\"$CT_PREFIX_DIR\"|" .config
+          sed -i "s|CT_LOCAL_TARBALLS_DIR=.*|CT_LOCAL_TARBALLS_DIR=\"$CT_LOCAL_TARBALLS_DIR\"|" .config
           
-          echo "4. Setel arsitektur Xtensa..."
-          if [[ "$TARGET" == "xtensa-"* ]]; then
-            sed -i '/CT_ARCH/d' .config
-            echo "CT_ARCH=\"xtensa\"" >> .config
-            if [[ "$TARGET" == *"esp32"* ]]; then
-              echo "CT_ARCH_XTENSA_CORE=\"${TARGET#xtensa-}\"" | sed 's/-elf//' >> .config
-              echo "CT_ARCH_XTENSA_SYSTEM=\"lx6\"" >> .config
-            fi
-          fi
+          # Enable experimental features untuk build yang lebih baru
+          echo "CT_EXPERIMENTAL=y" >> .config
+          echo "CT_ALLOW_BUILD_AS_ROOT=y" >> .config
+          echo "CT_ALLOW_BUILD_AS_ROOT_SURE=y" >> .config
           
-          echo "5. Setel host ARM64..."
-          echo "CT_HOST=\"${CT_HOST_TRIPLET}\"" >> .config
-          echo "CT_PREFIX_DIR=\"${CT_PREFIX_DIR}\"" >> .config
-          echo "CT_LOCAL_TARBALLS_DIR=\"$GITHUB_WORKSPACE/crosstool-ng/.build/tarballs\"" >> .config
-          
-          echo "6. HAPUS SEMUA alphaev4 references..."
-          grep -n "alphaev4" .config && echo "WARNING: Masih ada alphaev4!" || echo "✓ Tidak ada alphaev4"
-          sed -i '/alphaev4/d' .config
-          
-          echo "7. Tampilkan konfigurasi final..."
-          echo "=== CONFIG FINAL (10 baris pertama) ==="
-          head -20 .config
-          echo "CT_TARGET eksplisit: $(grep 'CT_TARGET=' .config)"
+          echo "=== KONFIGURASI FINAL ==="
+          echo "CT_TARGET: $(grep 'CT_TARGET=' .config)"
+          echo "CT_PREFIX_DIR: $(grep 'CT_PREFIX_DIR=' .config)"
+          echo "CT_LOCAL_TARBALLS_DIR: $(grep 'CT_LOCAL_TARBALLS_DIR=' .config)"
 
-      - name: VALIDASI KONFIGURASI dengan ct-ng show-config
+      - name: Tampilkan konfigurasi yang akan digunakan
         run: |
-          cd crosstool-ng
-          echo "Validasi: ct-ng show-config"
-          ./ct-ng show-config 2>&1 | head -30 || echo "show-config error, lanjut saja..."
+          cd $WORKSPACE/crosstool-ng
+          echo "=== SHOW-CONFIG ==="
+          ./ct-ng show-config 2>&1 | head -50
           
-          echo "Verifikasi target yang AKTIF:"
-          ./ct-ng show-config 2>&1 | grep -i "target\|TARGET" || true
+          echo "=== INFORMASI TARGET ==="
+          ./ct-ng show-config 2>&1 | grep -i "target\|arch\|host" || true
 
-      - name: Build dengan CT_NG_BUILD_FORCE
+      - name: Build toolchain dengan ct-ng
         id: build
         run: |
-          cd crosstool-ng
-          export HOME=$GITHUB_WORKSPACE
+          cd $WORKSPACE/crosstool-ng
           
-          echo "=== BUILD DENGAN ENV VARIABLES ==="
+          echo "=== MEMULAI BUILD TOOLCHAIN ==="
+          echo "Target: $TARGET"
+          echo "Host: $CT_HOST_TRIPLET"
+          echo "Prefix: $CT_PREFIX_DIR"
+          
+          # Set environment untuk build
           export CT_NG_BUILD_FORCE=1
-          export CT_ISL_MIRROR="https://gcc.gnu.org/pub/gcc/infrastructure"
-          export CT_ZLIB_MIRROR="https://zlib.net"
-          export CT_GMP_MIRROR="https://gmplib.org/download/gmp"
+          export CT_EXPERIMENTAL=y
+          export HOME=$WORKSPACE
           
-          mkdir -p "${CT_PREFIX_DIR}"
+          # Bersihkan build sebelumnya
+          ./ct-ng clean
           
-          echo "Mulai build $TARGET..."
-          echo "Menggunakan config:"
-          grep "CT_TARGET\|CT_ARCH\|CT_HOST" .config || echo "Config tidak terbaca"
-          
+          # Mulai build
+          echo "Membangun toolchain..."
           set +e
-          ./ct-ng build 2>&1 | tee build-full.log
+          time ./ct-ng build 2>&1 | tee $WORKSPACE/build.log
           BUILD_STATUS=$?
           set -e
           
           if [ $BUILD_STATUS -eq 0 ]; then
             echo "✓✓✓ BUILD SUKSES! ✓✓✓"
             echo "success=true" >> $GITHUB_OUTPUT
+            
+            # Verifikasi toolchain
+            if [ -f "$CT_PREFIX_DIR/$TARGET/bin/$TARGET-gcc" ]; then
+              echo "Toolchain ditemukan di: $CT_PREFIX_DIR/$TARGET/bin/"
+              "$CT_PREFIX_DIR/$TARGET/bin/$TARGET-gcc" --version
+            fi
           else
             echo "✗✗✗ BUILD GAGAL ✗✗✗"
-            
-            echo "=== ERROR ANALYSIS ==="
-            echo "1. Ada 'alphaev4' dalam log?"
-            grep -i "alphaev4" build-full.log && echo "YA ADA!" || echo "TIDAK ADA"
-            
-            echo "2. Ada 'download failed'?"
-            grep -i "download failed" build-full.log || echo "Bukan error download"
-            
-            echo "3. Target dalam config akhir?"
-            echo "File .config akhir:"
-            grep "CT_TARGET" .config || echo "CT_TARGET tidak ada"
-            
-            echo "4. 20 baris terakhir log:"
-            tail -20 build-full.log
-            
             echo "success=false" >> $GITHUB_OUTPUT
+            
+            # Analisis error
+            echo "=== ANALISIS ERROR ==="
+            tail -100 $WORKSPACE/build.log | grep -i "error\|fail\|warning" || true
+            
+            # Simpan log lengkap untuk debugging
+            mkdir -p $WORKSPACE/error-logs
+            cp $WORKSPACE/build.log $WORKSPACE/error-logs/build-$TARGET.log
+            cp .config $WORKSPACE/error-logs/config-$TARGET.txt
+            
             exit 1
           fi
 
-      - name: Verifikasi hasil build
+      - name: Package toolchain
         if: steps.build.outputs.success == 'true'
         id: package
         run: |
-          echo "Memverifikasi toolchain $TARGET..."
+          echo "Packaging toolchain $TARGET..."
           
-          if [ -f "${CT_PREFIX_DIR}/${TARGET}/bin/${TARGET}-gcc" ]; then
-            echo "✓✓✓ SUKSES: Toolchain $TARGET ADA! ✓✓✓"
-            "${CT_PREFIX_DIR}/${TARGET}/bin/${TARGET}-gcc" --version | head -1
-            
-            mkdir -p artifacts
-            ASSET="${TARGET}-host-arm64.tar.gz"
-            tar -czf "artifacts/${ASSET}" -C "${CT_PREFIX_DIR}" "${TARGET}"
-            
-            echo "✓ Toolchain dipackage: $ASSET"
-            echo "asset_name=${ASSET}" >> $GITHUB_OUTPUT
-          else
-            echo "✗ Toolchain TIDAK DITEMUKAN"
-            echo "Isi ${CT_PREFIX_DIR}:"
-            ls -la "${CT_PREFIX_DIR}" || true
-            exit 1
-          fi
+          # Verifikasi semua file penting
+          REQUIRED_FILES=(
+            "$CT_PREFIX_DIR/$TARGET/bin/$TARGET-gcc"
+            "$CT_PREFIX_DIR/$TARGET/bin/$TARGET-g++"
+            "$CT_PREFIX_DIR/$TARGET/bin/$TARGET-ar"
+            "$CT_PREFIX_DIR/$TARGET/bin/$TARGET-ld"
+            "$CT_PREFIX_DIR/$TARGET/bin/$TARGET-objcopy"
+          )
+          
+          for file in "${REQUIRED_FILES[@]}"; do
+            if [ -f "$file" ]; then
+              echo "✓ $file"
+            else
+              echo "✗ $file - TIDAK DITEMUKAN"
+            fi
+          done
+          
+          # Buat archive
+          mkdir -p $WORKSPACE/artifacts
+          TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+          ARCHIVE_NAME="${TARGET}-${CT_HOST_TRIPLET}-${TIMESTAMP}.tar.gz"
+          
+          echo "Membuat archive: $ARCHIVE_NAME"
+          tar -czf "$WORKSPACE/artifacts/$ARCHIVE_NAME" \
+            -C "$CT_PREFIX_DIR" \
+            "$TARGET"
+          
+          # Hitung ukuran
+          SIZE=$(du -h "$WORKSPACE/artifacts/$ARCHIVE_NAME" | cut -f1)
+          echo "Archive size: $SIZE"
+          
+          echo "asset_name=$ARCHIVE_NAME" >> $GITHUB_OUTPUT
+          echo "asset_path=$WORKSPACE/artifacts/$ARCHIVE_NAME" >> $GITHUB_OUTPUT
 
       - name: Upload artifact
         if: steps.build.outputs.success == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.package.outputs.asset_name || matrix.target }}-arm64
-          path: |
-            artifacts/
-          retention-days: 7
+          name: ${{ matrix.target }}-arm64-toolchain
+          path: ${{ steps.package.outputs.asset_path }}
+          retention-days: 30
 
-      - name: Simpan log error untuk debugging
+      - name: Upload error logs
+        if: steps.build.outputs.success == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: error-logs-${{ matrix.target }}
+          path: ${{ env.WORKSPACE }}/error-logs/
+          retention-days: 30
+
+      - name: Notify success
+        if: steps.build.outputs.success == 'true'
+        run: |
+          echo "========================================"
+          echo "🚀 Toolchain $TARGET berhasil dibangun!"
+          echo "📁 Lokasi: $CT_PREFIX_DIR/$TARGET"
+          echo "📦 Archive: ${{ steps.package.outputs.asset_name }}"
+          echo "========================================"
+
+      - name: Notify failure
         if: steps.build.outputs.success == 'false'
         run: |
-          echo "Menyimpan log error untuk analisis..."
-          mkdir -p error-logs
-          cp crosstool-ng/build-full.log error-logs/build-${{ matrix.target }}.log 2>/dev/null || true
-          cp crosstool-ng/.config error-logs/config-${{ matrix.target }}.txt 2>/dev/null || true
-          
-          echo "Log error disimpan di error-logs/"
-          ls -la error-logs/
+          echo "========================================"
+          echo "❌ Gagal membangun toolchain $TARGET"
+          echo "🔧 Lihat error-logs untuk debugging"
+          echo "========================================"
