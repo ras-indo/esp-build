@@ -53,7 +53,7 @@ jobs:
             git wget unzip pkg-config ca-certificates gperf ninja-build cmake \
             file bzip2 xz-utils lzip gzip curl rsync \
             libgmp-dev libmpfr-dev libmpc-dev libexpat1-dev zlib1g-dev \
-            g++ gcc gcc-multilib g++-multilib make patch
+            g++ gcc make patch
           sudo ln -sf /usr/bin/python3 /usr/bin/python || true
 
       - name: Download crosstool-NG fork
@@ -116,7 +116,7 @@ jobs:
             cp samples/$TARGET/crosstool.config .config
           else
             echo "Membuat configuration manual"
-            # Create a minimal configuration - FIXED: Use echo instead of heredoc
+            # Create a minimal configuration
             echo "CT_OBSOLETE=y" > .config
             echo "CT_EXPERIMENTAL=y" >> .config
             echo "CT_ALLOW_BUILD_AS_ROOT=y" >> .config
