@@ -1,4 +1,4 @@
-name: Build ESP-IDF Toolchains (ARM64 Host) - FIXED FINAL
+name: Build ESP-IDF Toolchains (ARM64 Host) - SYMLINK FIX
 
 on:
   push:
@@ -64,17 +64,6 @@ jobs:
           mv crosstool-NG crosstool-ng
           
           cd crosstool-ng
-          
-          echo "=== DEBUG: CEK FOLDER OVERLAYS ==="
-          ls -la overlays/
-          
-          echo "=== DEBUG: CEK FOLDER XTENSA_ESP32 ==="
-          if [ -d "overlays/xtensa_esp32" ]; then
-             echo "✓ Folder overlays/xtensa_esp32 ADA."
-          else
-             echo "✗ Folder overlays/xtensa_esp32 TIDAK ADA."
-          fi
-          
           ./bootstrap
           ./configure --enable-local --prefix=/usr/local
           make -j$(nproc)
@@ -85,12 +74,12 @@ jobs:
           mkdir -p $WORKSPACE/.build/tarballs
           echo "CT_LOCAL_TARBALLS_DIR=$WORKSPACE/.build/tarballs" >> $GITHUB_ENV
 
-      - name: Download Manual Library (LINK ALTERNATIF)
+      - name: Download Manual Library (ISL FIX)
         run: |
           echo "=== DOWNLOAD MANUAL DEPENDENCIES ==="
           cd $CT_LOCAL_TARBALLS_DIR
           
-          # 1. ISL 0.19 (Penyebab utama error download)
+          # 1. ISL 0.19 (CRITICAL)
           wget --tries=5 --waitretry=5 -O isl-0.19.tar.bz2 https://sources.easybuild.io/i/ISL/isl-0.19.tar.bz2
           
           # 2. GMP 6.2.0
@@ -108,16 +97,41 @@ jobs:
              wget --tries=5 -O mpc-1.1.0.tar.gz https://ftp.gnu.org/gnu/mpc/mpc-1.1.0.tar.gz
           fi
 
-          # Validasi File
+          # Validasi ISL
           if [ ! -s isl-0.19.tar.bz2 ] || [ $(stat -c%s "isl-0.19.tar.bz2") -lt 100000 ]; then
-             rm -f isl-0.19.tar.bz2
-             wget --tries=5 -O isl-0.19.tar.bz2 https://libisl.sourceforge.io/isl-0.19.tar.bz2
+            rm -f isl-0.19.tar.bz2
+            wget --tries=5 -O isl-0.19.tar.bz2 https://libisl.sourceforge.io/isl-0.19.tar.bz2
           fi
 
-      - name: Konfigurasi Toolchain (FIX PATH & NAME)
+      - name: Konfigurasi Toolchain (SYMLINK STRATEGY)
         run: |
           cd $WORKSPACE/crosstool-ng
           
+          # --- STRATEGI SYMLINK ANTI-GAGAL ---
+          echo "=== MEMBUAT SYMLINK OVERLAYS ==="
+          cd overlays
+          
+          # Cek folder asli
+          if [ -d "xtensa_esp32" ]; then
+             echo "Folder asli 'xtensa_esp32' ditemukan."
+             
+             # Buat symlink untuk semua kemungkinan nama yang mungkin dicari ct-ng
+             # 1. Jika dia mencari 'xtensa_xtensa_esp32' (Double prefix)
+             ln -s xtensa_esp32 xtensa_xtensa_esp32
+             
+             # 2. Jika dia mencari 'esp32' (Tanpa prefix)
+             ln -s xtensa_esp32 esp32
+             
+             echo "Symlinks dibuat. Daftar folder overlays:"
+             ls -la
+          else
+             echo "FATAL: Folder overlays/xtensa_esp32 tidak ditemukan!"
+             ls -la
+             exit 1
+          fi
+          cd ..
+          
+          # --- KONFIGURASI CONFIG ---
           echo "=== 1. Load Sample Config ==="
           if [ -f "samples/$TARGET/crosstool.config" ]; then
             cp samples/$TARGET/crosstool.config .config
@@ -125,7 +139,7 @@ jobs:
             ./ct-ng $TARGET
           fi
 
-          echo "=== 2. Hapus Variabel Lama ==="
+          echo "=== 2. Hapus Variabel ==="
           sed -i '/CT_PREFIX_DIR/d' .config
           sed -i '/CT_LOCAL_TARBALLS_DIR/d' .config
           sed -i '/CT_HOST/d' .config
@@ -133,7 +147,6 @@ jobs:
           sed -i '/CT_TARGET/d' .config
           sed -i '/CT_ARCH/d' .config
           sed -i '/CT_GDB_CROSS_PYTHON_BINARY/d' .config
-          # Reset setting overlay
           sed -i '/CT_OVERLAY_LOCATION/d' .config
           sed -i '/CT_OVERLAY_NAME/d' .config
 
@@ -147,9 +160,9 @@ jobs:
           CT_ARCH="xtensa"
           CT_ARCH_XTENSA=y
           
-          # FIX OVERLAY: Nama harus sesuai dengan folder fisik di repo
-          # Branch esp-2021r2 menggunakan folder "xtensa_esp32"
-          CT_OVERLAY_NAME="xtensa_esp32"
+          # FIX OVERLAY: Kita set "esp32", ct-ng akan mencari "xtensa_esp32"
+          # Kalaupun dia mencari nama lain, symlink di atas sudah menanganinya.
+          CT_OVERLAY_NAME="esp32"
           CT_OVERLAY_LOCATION="$WORKSPACE/crosstool-ng/overlays"
           
           # Environment
@@ -180,9 +193,6 @@ jobs:
 
           echo "=== 5. Jalankan Oldconfig ==="
           yes "" | ./ct-ng oldconfig
-          
-          echo "Verifikasi Config Overlay:"
-          grep "CT_OVERLAY" .config
 
       - name: Build Toolchain
         id: build
