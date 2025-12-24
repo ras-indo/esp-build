@@ -33,14 +33,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set environment
+      - name: Set environment variables
         run: |
           echo "TARGET=${{ matrix.target }}" >> $GITHUB_ENV
           echo "CT_PREFIX_DIR=$GITHUB_WORKSPACE/x-tools" >> $GITHUB_ENV
           echo "CT_HOST_TRIPLET=${{ env.CT_HOST_TRIPLET }}" >> $GITHUB_ENV
           echo "CROSSTOOL_NG_VERSION=${{ env.CROSSTOOL_NG_VERSION }}" >> $GITHUB_ENV
 
-      - name: Cache toolchains and ct-ng cache
+      - name: Setup cache untuk toolchains
         id: cache
         uses: actions/cache@v4
         with:
@@ -49,7 +49,7 @@ jobs:
             ~/.cache/ct-ng
           key: arm64-ctng-${{ matrix.target }}-${{ env.CROSSTOOL_NG_VERSION }}-${{ hashFiles('.github/workflows/build.yml') }}
 
-      - name: Install build dependencies
+      - name: Install dependencies build
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
           sudo apt-get update
@@ -61,14 +61,14 @@ jobs:
             file bzip2 xz-utils unzip
           sudo ln -sf /usr/bin/python3 /usr/bin/python || true
 
-      - name: Download and setup crosstool-NG (Espressif Fork)
+      - name: Download dan setup crosstool-NG (Fork Espressif)
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
           git clone --depth=1 https://github.com/espressif/crosstool-NG.git -b $CROSSTOOL_NG_VERSION
           mv crosstool-NG crosstool-ng
-          echo "Using Espressif fork ($CROSSTOOL_NG_VERSION) for ESP targets"
+          echo "Menggunakan fork Espressif ($CROSSTOOL_NG_VERSION) untuk target ESP"
 
-      - name: Build and install crosstool-NG
+      - name: Build dan install crosstool-NG
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
           cd crosstool-ng
@@ -77,40 +77,80 @@ jobs:
           make -j$(nproc)
           sudo make install
 
-      - name: Prepare ESP toolchain overlay
+      - name: Pre-download komponen ISL 0.22 (solusi utama)
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
-          echo "Preparing overlay for $TARGET..."
-          mkdir -p "$GITHUB_WORKSPACE/overlays"
+          echo "Mengunduh ISL 0.22 secara manual ke cache lokal..."
+          mkdir -p crosstool-ng/.build/tarballs
+          cd crosstool-ng/.build/tarballs
           
-          # Cek apakah overlay sudah ada di fork Espressif
-          if [ -d "crosstool-ng/overlays" ]; then
-            echo "Copying overlays from Espressif fork..."
-            cp -r crosstool-ng/overlays/* "$GITHUB_WORKSPACE/overlays/" 2>/dev/null || true
-            
-            # Tampilkan overlay yang tersedia
-            echo "Available overlays:"
-            find "$GITHUB_WORKSPACE/overlays" -type f -name "*.patch" | head -10 || echo "No patch files found"
-          fi
+          # Coba beberapa sumber untuk isl-0.22.tar.xz
+          echo "Mencoba sumber 1: gcc.gnu.org..."
+          wget -q --tries=3 --timeout=45 https://gcc.gnu.org/pub/gcc/infrastructure/isl-0.22.tar.xz || {
+            echo "Sumber 1 gagal, coba sumber 2: libisl.sourceforge.io..."
+            wget -q --tries=3 --timeout=45 https://libisl.sourceforge.io/isl-0.22.tar.xz || {
+              echo "Sumber 2 gagal, coba sumber 3: GitHub releases..."
+              wget -q --tries=2 --timeout=30 https://github.com/Meinersbur/isl/releases/download/isl-0.22/isl-0.22.tar.xz || {
+                echo "SEMUA SUMBER GAGAL. Membuat file dummy sebagai fallback..."
+                # File dummy sebagai last resort
+                touch isl-0.22.tar.xz
+                echo "File dummy dibuat, build mungkin akan mencari sumber lain"
+              }
+            }
+          }
           
-          # Buat overlay minimal jika tidak ada
-          if [ ! -d "$GITHUB_WORKSPACE/overlays/xtensa_esp32" ] && [[ "$TARGET" == "xtensa-esp32-elf" ]]; then
-            echo "Creating minimal overlay for xtensa-esp32-elf"
-            mkdir -p "$GITHUB_WORKSPACE/overlays/xtensa_esp32"
-            echo "Minimal overlay for xtensa-esp32-elf" > "$GITHUB_WORKSPACE/overlays/xtensa_esp32/README"
+          if [ -s "isl-0.22.tar.xz" ]; then
+            echo "✓ ISL 0.22 berhasil diunduh ($(du -h isl-0.22.tar.xz | cut -f1))"
+            ls -lh isl-0.22.tar.xz
+          else
+            echo "⚠ File ISL 0.22 kosong atau tidak ada"
           fi
 
-      - name: Create configuration for ${{ matrix.target }}
+      - name: Buat konfigurasi untuk ${{ matrix.target }}
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
           cd crosstool-ng
           
-          echo "Creating configuration for $TARGET..."
+          echo "MEMBUAT KONFIGURASI BARU untuk $TARGET..."
+          echo "Menghapus konfigurasi lama..."
+          rm -f .config .config.old .config.bak
           
-          # Gunakan config dasar yang sederhana
+          echo "Membuat konfigurasi spesifik untuk $TARGET..."
+          
+          # KONFIGURASI DASAR
           echo "CT_EXPERIMENTAL=y" > .config
           echo "CT_ALLOW_BUILD_AS_ROOT=y" >> .config
           echo "CT_ALLOW_BUILD_AS_ROOT_SURE=y" >> .config
+          echo "CT_LOG_PROGRESS_BAR=n" >> .config
+          echo "CT_LOG_LEVEL_MAX=INFO" >> .config
+          
+          # TARGET YANG SPESIFIK - INI PENTING!
+          echo "CT_TARGET=\"$TARGET\"" >> .config
+          
+          # Atur architecture berdasarkan target
+          if [[ "$TARGET" == "xtensa-"* ]]; then
+            echo "CT_ARCH=\"xtensa\"" >> .config
+            if [[ "$TARGET" == "xtensa-esp32-elf" ]]; then
+              echo "CT_ARCH_XTENSA_CORE=\"esp32\"" >> .config
+              echo "CT_ARCH_XTENSA_SYSTEM=\"lx6\"" >> .config
+            elif [[ "$TARGET" == "xtensa-esp32s2-elf" ]]; then
+              echo "CT_ARCH_XTENSA_CORE=\"esp32s2\"" >> .config
+              echo "CT_ARCH_XTENSA_SYSTEM=\"lx7\"" >> .config
+            elif [[ "$TARGET" == "xtensa-esp32s3-elf" ]]; then
+              echo "CT_ARCH_XTENSA_CORE=\"esp32s3\"" >> .config
+              echo "CT_ARCH_XTENSA_SYSTEM=\"lx7\"" >> .config
+            elif [[ "$TARGET" == "xtensa-lx106-elf" ]]; then
+              echo "CT_ARCH_XTENSA_CORE=\"lx106\"" >> .config
+              echo "CT_ARCH_XTENSA_SYSTEM=\"lx106\"" >> .config
+            fi
+          elif [[ "$TARGET" == "riscv32-esp-elf" ]]; then
+            echo "CT_ARCH=\"riscv\"" >> .config
+            echo "CT_ARCH_RISCV_ARCH=\"rv32imafc\"" >> .config
+            echo "CT_ARCH_RISCV_ABI=\"ilp32f\"" >> .config
+            echo "CT_ARCH_RISCV_TUNE=\"rocket\"" >> .config
+          fi
+          
+          # PENGATURAN TOOLCHAIN
           echo "CT_KERNEL_BARE_METAL=y" >> .config
           echo "CT_LIBC_NEWLIB=y" >> .config
           echo "CT_CC_LANG_CXX=y" >> .config
@@ -119,85 +159,59 @@ jobs:
           echo "CT_BINUTILS_LINKER_LD_GOLD=y" >> .config
           echo "CT_BINUTILS_LINKER_LD_BFD=y" >> .config
           echo "CT_BINUTILS_LINKER_LD_DEFAULT=\"bfd\"" >> .config
-          echo "CT_LOG_PROGRESS_BAR=n" >> .config
-          echo "CT_LOG_LEVEL_MAX=INFO" >> .config
           
-          # Pengaturan spesifik berdasarkan target
-          if [[ "$TARGET" == "xtensa-esp32-elf" ]]; then
-            echo "CT_TARGET=\"xtensa-esp32-elf\"" >> .config
-            echo "CT_ARCH=\"xtensa\"" >> .config
-            echo "CT_ARCH_XTENSA_CORE=\"esp32\"" >> .config
-            echo "CT_ARCH_XTENSA_SYSTEM=\"lx6\"" >> .config
-            echo "CT_OVERLAY_DIR=\"$GITHUB_WORKSPACE/overlays/xtensa_esp32\"" >> .config
-          elif [[ "$TARGET" == "xtensa-esp32s2-elf" ]]; then
-            echo "CT_TARGET=\"xtensa-esp32s2-elf\"" >> .config
-            echo "CT_ARCH=\"xtensa\"" >> .config
-            echo "CT_ARCH_XTENSA_CORE=\"esp32s2\"" >> .config
-            echo "CT_ARCH_XTENSA_SYSTEM=\"lx7\"" >> .config
-            echo "CT_OVERLAY_DIR=\"$GITHUB_WORKSPACE/overlays/xtensa_esp32s2\"" >> .config
-          elif [[ "$TARGET" == "xtensa-esp32s3-elf" ]]; then
-            echo "CT_TARGET=\"xtensa-esp32s3-elf\"" >> .config
-            echo "CT_ARCH=\"xtensa\"" >> .config
-            echo "CT_ARCH_XTENSA_CORE=\"esp32s3\"" >> .config
-            echo "CT_ARCH_XTENSA_SYSTEM=\"lx7\"" >> .config
-            echo "CT_OVERLAY_DIR=\"$GITHUB_WORKSPACE/overlays/xtensa_esp32s3\"" >> .config
-          elif [[ "$TARGET" == "xtensa-lx106-elf" ]]; then
-            echo "CT_TARGET=\"xtensa-lx106-elf\"" >> .config
-            echo "CT_ARCH=\"xtensa\"" >> .config
-            echo "CT_ARCH_XTENSA_CORE=\"lx106\"" >> .config
-            echo "CT_ARCH_XTENSA_SYSTEM=\"lx106\"" >> .config
-            echo "CT_OVERLAY_DIR=\"$GITHUB_WORKSPACE/overlays/xtensa_lx106\"" >> .config
-          elif [[ "$TARGET" == "riscv32-esp-elf" ]]; then
-            echo "CT_TARGET=\"riscv32-esp-elf\"" >> .config
-            echo "CT_ARCH=\"riscv\"" >> .config
-            echo "CT_ARCH_RISCV_ARCH=\"rv32imafc\"" >> .config
-            echo "CT_ARCH_RISCV_ABI=\"ilp32f\"" >> .config
-            echo "CT_ARCH_RISCV_TUNE=\"rocket\"" >> .config
-            echo "CT_OVERLAY_DIR=\"$GITHUB_WORKSPACE/overlays/riscv32_esp\"" >> .config
-          fi
-          
-          # Pengaturan umum
+          # PENGATURAN HOST DAN PATH
           echo "CT_HOST=\"${CT_HOST_TRIPLET}\"" >> .config
           echo "CT_PREFIX_DIR=\"${CT_PREFIX_DIR}\"" >> .config
-          echo "CT_LOCAL_TARBALLS_DIR=\"$GITHUB_WORKSPACE/.build/tarballs\"" >> .config
+          echo "CT_LOCAL_TARBALLS_DIR=\"$GITHUB_WORKSPACE/crosstool-ng/.build/tarballs\"" >> .config
           
-          # Mirror khusus untuk komponen yang bermasalah
-          echo "CT_ISL_MIRROR=\"https://libisl.sourceforge.io\"" >> .config
+          # MIRROR KHUSUS - untuk menghindari error download
+          echo "CT_ISL_MIRROR=\"https://gcc.gnu.org/pub/gcc/infrastructure\"" >> .config
+          echo "CT_ISL_VERSION=\"0.22\"" >> .config
           echo "CT_ZLIB_MIRROR=\"https://zlib.net\"" >> .config
           echo "CT_GMP_MIRROR=\"https://gmplib.org/download/gmp\"" >> .config
-          echo "CT_MPFR_MIRROR=\"https://www.mpfr.org/mpfr-current\"" >> .config
+          echo "CT_MPFR_MIRROR=\"https://www.mpfr.org/mpfr-4.0.2\"" >> .config
           echo "CT_MPC_MIRROR=\"https://ftp.gnu.org/gnu/mpc\"" >> .config
+          echo "CT_EXPAT_MIRROR=\"https://github.com/libexpat/libexpat/releases/download\"" >> .config
+          echo "CT_NCURSES_MIRROR=\"https://ftp.gnu.org/gnu/ncurses\"" >> .config
           
-          # Hapus duplikasi
+          # Hapus baris kosong dan duplikasi
           sort -u .config -o .config
           sed -i '/^$/d' .config
           
-          # Simpan untuk backup
+          # Simpan backup konfigurasi
           cp .config "$GITHUB_WORKSPACE/.config-$TARGET-generated"
-          echo "Configuration saved"
+          
+          echo "Konfigurasi untuk $TARGET telah dibuat:"
+          echo "========================================="
+          grep -E "CT_TARGET|CT_ARCH|CT_HOST|CT_ISL" .config || true
+          echo "========================================="
 
-      - name: Validate configuration
+      - name: Validasi konfigurasi
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
           cd crosstool-ng
           
-          echo "Validating configuration..."
+          echo "Memvalidasi konfigurasi..."
           
           # Jalankan oldconfig untuk mengisi nilai default
-          ./ct-ng oldconfig </dev/null 2>&1 | tee oldconfig.log || echo "oldconfig completed"
+          echo "Menjalankan ct-ng oldconfig..."
+          ./ct-ng oldconfig </dev/null 2>&1 | tee oldconfig.log || echo "oldconfig selesai (mungkin ada warning)"
           
-          # Tampilkan konfigurasi penting
-          echo "Important configuration values:"
-          grep -E "CT_TARGET|CT_ARCH|CT_HOST|CT_OVERLAY_DIR" .config || true
-          
-          # Validasi
-          if ./ct-ng show-config > show-config.log 2>&1; then
-            echo "Configuration validation PASSED"
+          # Cek target yang sudah dikonfigurasi
+          echo "Target dalam konfigurasi final:"
+          if grep -q "CT_TARGET=\"$TARGET\"" .config; then
+            echo "✓ Target BENAR: $TARGET"
           else
-            echo "Configuration validation issues:"
-            cat show-config.log
-            echo "Will try to continue anyway..."
+            echo "✗ Target SALAH! Memperbaiki..."
+            ACTUAL_TARGET=$(grep "CT_TARGET=" .config | head -1)
+            echo "Target saat ini: $ACTUAL_TARGET"
+            sed -i "s|CT_TARGET=.*|CT_TARGET=\"$TARGET\"|" .config
+            echo "Target telah diperbaiki ke: $TARGET"
           fi
+          
+          # Simpan konfigurasi final
+          cp .config "$GITHUB_WORKSPACE/.config-$TARGET-final"
 
       - name: Build toolchain ${{ matrix.target }}
         if: steps.cache.outputs.cache-hit != 'true'
@@ -208,93 +222,114 @@ jobs:
           # Buat direktori output
           mkdir -p "${CT_PREFIX_DIR}"
           
-          echo "Building $TARGET on ARM64..."
+          echo "MEMBANGUN TOOLCHAIN: $TARGET pada ARM64..."
+          echo "Waktu mulai: $(date)"
           
           # Set environment variables untuk mirror
-          export CT_ISL_MIRROR="https://libisl.sourceforge.io"
+          export CT_ISL_MIRROR="https://gcc.gnu.org/pub/gcc/infrastructure"
+          export CT_ISL_VERSION="0.22"
           export CT_ZLIB_MIRROR="https://zlib.net"
           export CT_GMP_MIRROR="https://gmplib.org/download/gmp"
-          export CT_MPFR_MIRROR="https://www.mpfr.org/mpfr-current"
+          export CT_MPFR_MIRROR="https://www.mpfr.org/mpfr-4.0.2"
           export CT_MPC_MIRROR="https://ftp.gnu.org/gnu/mpc"
           export CT_EXPAT_MIRROR="https://github.com/libexpat/libexpat/releases/download"
           export CT_NCURSES_MIRROR="https://ftp.gnu.org/gnu/ncurses"
           
-          # Buat direktori untuk tarballs lokal
-          mkdir -p "$GITHUB_WORKSPACE/.build/tarballs"
+          # Tampilkan info penting sebelum build
+          echo "=== INFORMASI KONFIGURASI ==="
+          echo "Target: $TARGET"
+          echo "Host: ${CT_HOST_TRIPLET}"
+          echo "Prefix dir: ${CT_PREFIX_DIR}"
+          echo "ISL Mirror: $CT_ISL_MIRROR"
+          echo "ISL Version: $CT_ISL_VERSION"
+          echo ""
+          echo "Tarball ISL yang tersedia:"
+          ls -la .build/tarballs/isl* 2>/dev/null || echo "  (tidak ditemukan)"
           
-          echo "Starting build process..."
-          
-          # Build dengan timeout yang lebih panjang
-          timeout 3600 ./ct-ng build 2>&1 | tee build-$TARGET.log
+          # Build dengan timeout 2 jam
+          echo "=== MEMULAI PROSES BUILD ==="
+          timeout 7200 ./ct-ng build 2>&1 | tee build-$TARGET.log
           BUILD_STATUS=${PIPESTATUS[0]}
           
           if [ $BUILD_STATUS -eq 0 ]; then
-            echo "Build $TARGET SUCCESSFUL!"
+            echo "✓✓✓ BUILD BERHASIL untuk $TARGET ✓✓✓"
+            echo "Waktu selesai: $(date)"
           elif [ $BUILD_STATUS -eq 124 ]; then
-            echo "Build TIMEOUT after 1 hour"
+            echo "✗ BUILD TIMEOUT setelah 2 jam"
+            echo "Log terakhir:"
+            tail -100 build-$TARGET.log
             exit 1
           else
-            echo "Build $TARGET FAILED. Analyzing error..."
+            echo "✗ BUILD GAGAL. Menganalisis error..."
             
-            # Cek error spesifik
-            if grep -q "Overlay.*not found" build-$TARGET.log; then
-              echo "Overlay error detected. Trying without overlay..."
-              sed -i '/CT_OVERLAY_DIR/d' .config
-              echo "CT_OVERLAY_DIR=\"\"" >> .config
-              echo "Retrying build without overlay..."
-              ./ct-ng build 2>&1 | tee build-$TARGET-no-overlay.log || {
-                echo "Build without overlay failed"
+            # Analisis error spesifik
+            if grep -q "alphaev4" build-$TARGET.log; then
+              echo "ERROR: Masih ada konfigurasi alphaev4!"
+              echo "Periksa file .config untuk CT_TARGET"
+              grep "CT_TARGET" .config || echo "CT_TARGET tidak ditemukan"
+              exit 1
+            elif grep -q "isl.*download failed" build-$TARGET.log; then
+              echo "ERROR: Download ISL masih gagal"
+              echo "Coba download ulang secara manual..."
+              cd .build/tarballs
+              rm -f isl-0.22.tar.xz
+              wget -q https://gcc.gnu.org/pub/gcc/infrastructure/isl-0.22.tar.xz || echo "Download gagal"
+              cd ../..
+              echo "Mencoba build lagi..."
+              ./ct-ng build 2>&1 | tee build-$TARGET-retry.log || {
+                echo "Retry juga gagal"
                 exit 1
               }
-            elif grep -q "download failed" build-$TARGET.log; then
-              echo "Download error detected. Check mirror configuration."
-              echo "Failed component:"
-              grep "Retrieving\|download failed" build-$TARGET.log | tail -5
-              exit 1
             else
-              echo "Other build error. Last 30 lines of log:"
-              tail -30 build-$TARGET.log
+              echo "ERROR lain. 50 baris terakhir log:"
+              tail -50 build-$TARGET.log
               exit 1
             fi
           fi
 
-      - name: Verify and package toolchain
+      - name: Verifikasi dan package toolchain
         id: package
         run: |
-          # Verifikasi toolchain
+          echo "Memverifikasi toolchain $TARGET..."
+          
+          # Verifikasi biner toolchain
           TOOLCHAIN_BIN="${CT_PREFIX_DIR}/${TARGET}/bin/${TARGET}-gcc"
           if [ -f "$TOOLCHAIN_BIN" ] && [ -x "$TOOLCHAIN_BIN" ]; then
-            echo "Toolchain $TARGET built successfully"
-            echo "Version info:"
+            echo "✓ Toolchain $TARGET berhasil dibangun"
+            echo "Versi GCC:"
             "$TOOLCHAIN_BIN" --version | head -3
             
-            # Test compile
+            # Test kompilasi sederhana
+            echo "Menguji kompilasi..."
             echo 'int main() { return 0; }' > test.c
             if "$TOOLCHAIN_BIN" -o test.elf test.c 2>/dev/null; then
-              echo "Test compilation PASSED"
+              echo "✓ Test kompilasi BERHASIL"
               file test.elf
               rm -f test.c test.elf
             else
-              echo "Test compilation failed, but toolchain exists"
+              echo "⚠ Test kompilasi gagal, tetapi toolchain ada"
               rm -f test.c
             fi
           else
-            echo "ERROR: Toolchain binary not found or not executable"
-            echo "Expected path: $TOOLCHAIN_BIN"
-            echo "Directory listing:"
-            ls -la "${CT_PREFIX_DIR}/${TARGET}/bin/" 2>/dev/null || echo "Directory not found"
+            echo "✗ ERROR: Biner toolchain tidak ditemukan"
+            echo "Path yang diharapkan: $TOOLCHAIN_BIN"
+            echo "Isi direktori bin:"
+            ls -la "${CT_PREFIX_DIR}/${TARGET}/bin/" 2>/dev/null || echo "Direktori tidak ditemukan"
             exit 1
           fi
           
           # Package toolchain
+          echo "Membuat package toolchain..."
           mkdir -p artifacts
           ASSET="${TARGET}-host-arm64.tar.gz"
+          
           if [ -d "${CT_PREFIX_DIR}/${TARGET}" ]; then
-            echo "Packaging ${CT_PREFIX_DIR}/${TARGET}"
+            echo "Mengompres ${CT_PREFIX_DIR}/${TARGET}..."
             tar -czf "artifacts/${ASSET}" -C "${CT_PREFIX_DIR}" "${TARGET}"
-            echo "Created artifact: ${ASSET}"
+            echo "✓ Package dibuat: ${ASSET}"
+            echo "Ukuran: $(du -h artifacts/${ASSET} | cut -f1)"
           else
-            echo "ERROR: Toolchain directory not found"
+            echo "✗ ERROR: Direktori toolchain tidak ditemukan"
             exit 1
           fi
           
@@ -316,21 +351,26 @@ jobs:
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
-      - name: Generate summary
+      - name: Generate build summary
         run: |
-          echo "# ESP-IDF Toolchain Build Summary" > summary.md
+          echo "# 📦 Ringkasan Build ESP-IDF Toolchains" > summary.md
           echo "" >> summary.md
-          echo "**Build completed:** $(date)" >> summary.md
+          echo "**Build selesai pada:** $(date)" >> summary.md
           echo "" >> summary.md
-          echo "## Targets attempted:" >> summary.md
-          echo "- xtensa-esp32-elf" >> summary.md
-          echo "- xtensa-esp32s2-elf" >> summary.md
-          echo "- xtensa-esp32s3-elf" >> summary.md
-          echo "- xtensa-lx106-elf" >> summary.md
-          echo "- riscv32-esp-elf" >> summary.md
+          echo "## Target yang dicoba:" >> summary.md
+          echo "- xtensa-esp32-elf (ESP32)" >> summary.md
+          echo "- xtensa-esp32s2-elf (ESP32-S2)" >> summary.md
+          echo "- xtensa-esp32s3-elf (ESP32-S3)" >> summary.md
+          echo "- xtensa-lx106-elf (ESP8266)" >> summary.md
+          echo "- riscv32-esp-elf (ESP32-C3/C6 RISC-V)" >> summary.md
           echo "" >> summary.md
-          echo "## Next steps:" >> summary.md
-          echo "1. Download artifacts from the Actions tab" >> summary.md
-          echo "2. Extract toolchains: \`tar -xzf <toolchain>.tar.gz\`" >> summary.md
-          echo "3. Add to PATH: \`export PATH=\$PATH:/path/to/toolchain/bin\`" >> summary.md
+          echo "## Cara menggunakan toolchain:" >> summary.md
+          echo "1. Download artifact dari tab Actions" >> summary.md
+          echo "2. Ekstrak: \`tar -xzf <nama-toolchain>.tar.gz\`" >> summary.md
+          echo "3. Tambahkan ke PATH: \`export PATH=\$PATH:/path/ke/toolchain/bin\`" >> summary.md
+          echo "" >> summary.md
+          echo "## Catatan:" >> summary.md
+          echo "- Toolchain dikompilasi untuk host **ARM64** (Apple Silicon, AWS Graviton, dll)" >> summary.md
+          echo "- Menggunakan fork crosstool-NG dari Espressif" >> summary.md
+          echo "- Build otomatis berjalan saat push ke branch main" >> summary.md
           cat summary.md
