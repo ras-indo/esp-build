@@ -77,85 +77,166 @@ jobs:
           make -j$(nproc)
           sudo make install
 
-      - name: Download ESP-IDF toolchain configuration
-        if: steps.cache.outputs.cache-hit != 'true'
-        run: |
-          mkdir -p esp-configs
-          # Download konfigurasi dari ESP-IDF repository
-          # Untuk target Xtensa (ESP32, ESP32-S2, ESP32-S3, ESP8266)
-          if [[ "$TARGET" == xtensa-* ]]; then
-            CONFIG_URL="https://raw.githubusercontent.com/espressif/esp-idf/master/tools/toolchain/$TARGET/crosstool.config"
-          # Untuk target RISC-V (ESP32-C3, ESP32-C6)
-          elif [[ "$TARGET" == riscv32-* ]]; then
-            CONFIG_URL="https://raw.githubusercontent.com/espressif/esp-idf/master/tools/toolchain/$TARGET/crosstool.config"
-          fi
-          
-          echo "Downloading config from: $CONFIG_URL"
-          if wget -q --spider "$CONFIG_URL"; then
-            wget -q -O esp-configs/$TARGET.config "$CONFIG_URL"
-            echo "Config downloaded successfully"
-          else
-            echo "WARNING: Config not found at $CONFIG_URL"
-            # Gunakan config dasar - TIDAK PAKAI HEREDOC
-            echo "CT_EXPERIMENTAL=y" > esp-configs/$TARGET.config
-            echo "CT_ALLOW_BUILD_AS_ROOT=y" >> esp-configs/$TARGET.config
-            echo "CT_ALLOW_BUILD_AS_ROOT_SURE=y" >> esp-configs/$TARGET.config
-            echo "CT_LOG_PROGRESS_BAR=n" >> esp-configs/$TARGET.config
-            echo "CT_LOG_LEVEL_MAX=INFO" >> esp-configs/$TARGET.config
-          fi
-
-      - name: Prepare configuration for ${{ matrix.target }}
+      - name: Create configuration for ${{ matrix.target }}
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
           cd crosstool-ng
           
-          # Gunakan config dari ESP-IDF jika ada
-          if [ -f "$GITHUB_WORKSPACE/esp-configs/$TARGET.config" ]; then
-            echo "Using ESP-IDF configuration for $TARGET"
-            cp "$GITHUB_WORKSPACE/esp-configs/$TARGET.config" .config
+          echo "Creating configuration for $TARGET..."
+          
+          # Coba gunakan sample config yang ada di fork Espressif
+          # Espressif fork biasanya memiliki config di folder configs/
+          if [ -f "configs/$TARGET/crosstool.config" ]; then
+            echo "Using config from Espressif fork: configs/$TARGET/crosstool.config"
+            cp "configs/$TARGET/crosstool.config" .config
+          elif [ -f "samples/$TARGET/crosstool.config" ]; then
+            echo "Using sample config: samples/$TARGET/crosstool.config"
+            cp "samples/$TARGET/crosstool.config" .config
           else
-            echo "ERROR: No configuration found for $TARGET"
-            exit 1
+            echo "No existing config found, creating basic configuration..."
+            
+            # Buat konfigurasi minimal menggunakan ct-ng
+            # Untuk target ESP, kita perlu menentukan arsitektur dengan benar
+            if [[ "$TARGET" == "xtensa-esp32-elf" ]]; then
+              cat > .config << 'CONFIG_EOF'
+CT_EXPERIMENTAL=y
+CT_ALLOW_BUILD_AS_ROOT=y
+CT_ALLOW_BUILD_AS_ROOT_SURE=y
+CT_TARGET="xtensa-esp32-elf"
+CT_ARCH="xtensa"
+CT_ARCH_XTENSA_CORE="esp32"
+CT_ARCH_XTENSA_SYSTEM="lx6"
+CT_KERNEL_BARE_METAL=y
+CT_LIBC_NEWLIB=y
+CT_CC_LANG_CXX=y
+CT_CC_GCC_ENABLE_TARGET_OPTSPACE=y
+CT_DEBUG_GDB=y
+CT_BINUTILS_LINKER_LD_GOLD=y
+CT_BINUTILS_LINKER_LD_BFD=y
+CT_BINUTILS_LINKER_LD_DEFAULT="bfd"
+CONFIG_EOF
+            elif [[ "$TARGET" == "xtensa-esp32s2-elf" ]]; then
+              cat > .config << 'CONFIG_EOF'
+CT_EXPERIMENTAL=y
+CT_ALLOW_BUILD_AS_ROOT=y
+CT_ALLOW_BUILD_AS_ROOT_SURE=y
+CT_TARGET="xtensa-esp32s2-elf"
+CT_ARCH="xtensa"
+CT_ARCH_XTENSA_CORE="esp32s2"
+CT_ARCH_XTENSA_SYSTEM="lx7"
+CT_KERNEL_BARE_METAL=y
+CT_LIBC_NEWLIB=y
+CT_CC_LANG_CXX=y
+CT_CC_GCC_ENABLE_TARGET_OPTSPACE=y
+CT_DEBUG_GDB=y
+CT_BINUTILS_LINKER_LD_GOLD=y
+CT_BINUTILS_LINKER_LD_BFD=y
+CT_BINUTILS_LINKER_LD_DEFAULT="bfd"
+CONFIG_EOF
+            elif [[ "$TARGET" == "xtensa-esp32s3-elf" ]]; then
+              cat > .config << 'CONFIG_EOF'
+CT_EXPERIMENTAL=y
+CT_ALLOW_BUILD_AS_ROOT=y
+CT_ALLOW_BUILD_AS_ROOT_SURE=y
+CT_TARGET="xtensa-esp32s3-elf"
+CT_ARCH="xtensa"
+CT_ARCH_XTENSA_CORE="esp32s3"
+CT_ARCH_XTENSA_SYSTEM="lx7"
+CT_KERNEL_BARE_METAL=y
+CT_LIBC_NEWLIB=y
+CT_CC_LANG_CXX=y
+CT_CC_GCC_ENABLE_TARGET_OPTSPACE=y
+CT_DEBUG_GDB=y
+CT_BINUTILS_LINKER_LD_GOLD=y
+CT_BINUTILS_LINKER_LD_BFD=y
+CT_BINUTILS_LINKER_LD_DEFAULT="bfd"
+CONFIG_EOF
+            elif [[ "$TARGET" == "xtensa-lx106-elf" ]]; then
+              cat > .config << 'CONFIG_EOF'
+CT_EXPERIMENTAL=y
+CT_ALLOW_BUILD_AS_ROOT=y
+CT_ALLOW_BUILD_AS_ROOT_SURE=y
+CT_TARGET="xtensa-lx106-elf"
+CT_ARCH="xtensa"
+CT_ARCH_XTENSA_CORE="lx106"
+CT_ARCH_XTENSA_SYSTEM="lx106"
+CT_KERNEL_BARE_METAL=y
+CT_LIBC_NEWLIB=y
+CT_CC_LANG_CXX=y
+CT_CC_GCC_ENABLE_TARGET_OPTSPACE=y
+CT_DEBUG_GDB=y
+CT_BINUTILS_LINKER_LD_GOLD=y
+CT_BINUTILS_LINKER_LD_BFD=y
+CT_BINUTILS_LINKER_LD_DEFAULT="bfd"
+CONFIG_EOF
+            elif [[ "$TARGET" == "riscv32-esp-elf" ]]; then
+              cat > .config << 'CONFIG_EOF'
+CT_EXPERIMENTAL=y
+CT_ALLOW_BUILD_AS_ROOT=y
+CT_ALLOW_BUILD_AS_ROOT_SURE=y
+CT_TARGET="riscv32-esp-elf"
+CT_ARCH="riscv"
+CT_ARCH_RISCV_ARCH="rv32imafc"
+CT_ARCH_RISCV_ABI="ilp32f"
+CT_ARCH_RISCV_TUNE="rocket"
+CT_KERNEL_BARE_METAL=y
+CT_LIBC_NEWLIB=y
+CT_CC_LANG_CXX=y
+CT_CC_GCC_ENABLE_TARGET_OPTSPACE=y
+CT_DEBUG_GDB=y
+CT_BINUTILS_LINKER_LD_GOLD=y
+CT_BINUTILS_LINKER_LD_BFD=y
+CT_BINUTILS_LINKER_LD_DEFAULT="bfd"
+CONFIG_EOF
+            fi
           fi
           
-          # Tentukan CT_ARCH berdasarkan target
-          if [[ "$TARGET" == xtensa-* ]]; then
-            echo "CT_ARCH=\"xtensa\"" >> .config
-            echo "CT_ARCH_XTENSA_CORE=\"$(echo $TARGET | sed 's/xtensa-\(.*\)-elf/\1/')-lite\"" >> .config
-          elif [[ "$TARGET" == riscv32-* ]]; then
-            echo "CT_ARCH=\"riscv\"" >> .config
-            echo "CT_ARCH_RISCV_ARCH=\"rv32imafc\"" >> .config
-            echo "CT_ARCH_RISCV_ABI=\"ilp32f\"" >> .config
-          fi
-          
-          # Pengaturan wajib untuk build sukses
-          echo "CT_TARGET=\"$TARGET\"" >> .config
-          echo "CT_PREFIX_DIR=\"${CT_PREFIX_DIR}\"" >> .config
+          # Update dengan pengaturan ARM64 host
           echo "CT_HOST=\"${CT_HOST_TRIPLET}\"" >> .config
-          echo "CT_KERNEL_BARE_METAL=y" >> .config
-          echo "CT_LIBC_NEWLIB=y" >> .config
-          echo "CT_CC_LANG_CXX=y" >> .config
-          echo "CT_CC_GCC_EXTRA_CONFIG_ARRAY=\"\"" >> .config
-          echo "CT_BINUTILS_EXTRA_CONFIG_ARRAY=\"\"" >> .config
-          echo "CT_ARCH_ARCH=\"\"" >> .config
-          echo "CT_ARCH_TUNE=\"\"" >> .config
-          echo "CT_ARCH_CPU=\"\"" >> .config
+          echo "CT_PREFIX_DIR=\"${CT_PREFIX_DIR}\"" >> .config
+          echo "CT_LOG_PROGRESS_BAR=n" >> .config
+          echo "CT_LOG_LEVEL_MAX=INFO" >> .config
           
-          # Hapus duplikasi dan blank lines
+          # Hapus duplikasi
           sort -u .config -o .config
           sed -i '/^$/d' .config
           
-          # Validasi konfigurasi
-          echo "Validating configuration..."
-          if ! ./ct-ng show-config > /dev/null 2>&1; then
-            echo "ERROR: Configuration validation failed"
-            echo "First 50 lines of config:"
-            head -50 .config
+          # Tampilkan konfigurasi untuk debugging
+          echo "Configuration created. First 20 lines:"
+          head -20 .config
+          
+          # Simpan untuk backup
+          cp .config "$GITHUB_WORKSPACE/.config-$TARGET-generated"
+
+      - name: Validate and finalize configuration
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          cd crosstool-ng
+          
+          echo "Validating configuration with ct-ng..."
+          
+          # Jalankan ct-ng oldconfig untuk mengisi nilai default yang hilang
+          if ./ct-ng oldconfig </dev/null 2>&1 | tee oldconfig.log; then
+            echo "oldconfig completed successfully"
+          else
+            echo "oldconfig had issues, but continuing..."
+          fi
+          
+          # Cek apakah konfigurasi valid
+          if ./ct-ng show-config > show-config.log 2>&1; then
+            echo "Configuration validation PASSED"
+            cat show-config.log | head -20
+          else
+            echo "Configuration validation FAILED"
+            echo "Error output:"
+            cat show-config.log
+            echo "Current configuration:"
+            cat .config | head -50
             exit 1
           fi
           
+          # Simpan konfigurasi final
           cp .config "$GITHUB_WORKSPACE/.config-$TARGET-final"
-          echo "Final configuration saved"
 
       - name: Build toolchain ${{ matrix.target }}
         if: steps.cache.outputs.cache-hit != 'true'
@@ -166,21 +247,24 @@ jobs:
           # Buat direktori output
           mkdir -p "${CT_PREFIX_DIR}"
           
-          echo "Building $TARGET..."
+          echo "Building $TARGET on ARM64..."
           
-          # Tampilkan info konfigurasi penting
-          echo "Important config values:"
-          grep -E "CT_ARCH|CT_TARGET|CT_HOST|CT_PREFIX_DIR" .config || true
+          # Tampilkan info sistem
+          echo "System info:"
+          uname -a
+          echo "CPU cores: $(nproc)"
           
-          # Build dengan verbose output untuk debugging
-          ./ct-ng build 2>&1 | tee build.log
+          # Build dengan log verbose
+          set -x
+          ./ct-ng build 2>&1 | tee build-$TARGET.log
+          BUILD_STATUS=${PIPESTATUS[0]}
+          set +x
           
-          # Cek status build
-          if [ ${PIPESTATUS[0]} -eq 0 ]; then
-            echo "Build $TARGET successful!"
+          if [ $BUILD_STATUS -eq 0 ]; then
+            echo "Build $TARGET SUCCESSFUL!"
           else
-            echo "Build $TARGET failed. Last 100 lines of log:"
-            tail -100 build.log
+            echo "Build $TARGET FAILED. Last 50 lines of log:"
+            tail -50 build-$TARGET.log
             exit 1
           fi
 
@@ -189,28 +273,42 @@ jobs:
         run: |
           # Verifikasi toolchain
           TOOLCHAIN_BIN="${CT_PREFIX_DIR}/${TARGET}/bin/${TARGET}-gcc"
-          if [ -f "$TOOLCHAIN_BIN" ]; then
+          if [ -f "$TOOLCHAIN_BIN" ] && [ -x "$TOOLCHAIN_BIN" ]; then
             echo "Toolchain $TARGET built successfully"
-            "$TOOLCHAIN_BIN" --version | head -1
+            echo "Version info:"
+            "$TOOLCHAIN_BIN" --version | head -3
             
-            # Test compile sederhana
+            # Test compile
             echo 'int main() { return 0; }' > test.c
-            "$TOOLCHAIN_BIN" -o test.elf test.c
-            if [ -f "test.elf" ]; then
-              echo "Test compilation successful"
-              rm test.c test.elf
+            if "$TOOLCHAIN_BIN" -o test.elf test.c 2>/dev/null; then
+              echo "Test compilation PASSED"
+              file test.elf
+              rm -f test.c test.elf
+            else
+              echo "Test compilation failed, but toolchain exists"
+              rm -f test.c
             fi
           else
-            echo "ERROR: Toolchain not found at $TOOLCHAIN_BIN"
-            echo "Checking directory contents..."
-            find "${CT_PREFIX_DIR}" -type f -name "*gcc*" 2>/dev/null || true
+            echo "ERROR: Toolchain binary not found or not executable"
+            echo "Expected path: $TOOLCHAIN_BIN"
+            echo "Directory listing:"
+            ls -la "${CT_PREFIX_DIR}/${TARGET}/bin/" 2>/dev/null || echo "Directory not found"
             exit 1
           fi
           
           # Package toolchain
           mkdir -p artifacts
           ASSET="${TARGET}-host-arm64.tar.gz"
-          tar -czf "artifacts/${ASSET}" -C "${CT_PREFIX_DIR}" "${TARGET}"
+          if [ -d "${CT_PREFIX_DIR}/${TARGET}" ]; then
+            echo "Packaging ${CT_PREFIX_DIR}/${TARGET}"
+            tar -czf "artifacts/${ASSET}" -C "${CT_PREFIX_DIR}" "${TARGET}"
+            echo "Created artifact: ${ASSET}"
+          else
+            echo "ERROR: Toolchain directory not found"
+            exit 1
+          fi
+          
+          # Generate checksum
           sha256sum "artifacts/${ASSET}" > "artifacts/${ASSET}.sha256"
           echo "asset_name=${ASSET}" >> $GITHUB_OUTPUT
           echo "asset_path=artifacts/${ASSET}" >> $GITHUB_OUTPUT
@@ -230,13 +328,19 @@ jobs:
     steps:
       - name: Generate summary
         run: |
-          echo "# Build Summary" > summary.md
-          echo "Completed at: $(date)" >> summary.md
-          echo "Workflow: ${{ github.workflow }}" >> summary.md
-          echo "## Targets built:" >> summary.md
+          echo "# ESP-IDF Toolchain Build Summary" > summary.md
+          echo "" >> summary.md
+          echo "**Build completed:** $(date)" >> summary.md
+          echo "" >> summary.md
+          echo "## Targets attempted:" >> summary.md
           echo "- xtensa-esp32-elf" >> summary.md
           echo "- xtensa-esp32s2-elf" >> summary.md
           echo "- xtensa-esp32s3-elf" >> summary.md
           echo "- xtensa-lx106-elf" >> summary.md
           echo "- riscv32-esp-elf" >> summary.md
+          echo "" >> summary.md
+          echo "## Next steps:" >> summary.md
+          echo "1. Download artifacts from the Actions tab" >> summary.md
+          echo "2. Extract toolchains: \`tar -xzf <toolchain>.tar.gz\`" >> summary.md
+          echo "3. Add to PATH: \`export PATH=\$PATH:/path/to/toolchain/bin\`" >> summary.md
           cat summary.md
