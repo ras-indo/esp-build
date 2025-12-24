@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 env:
-  CROSSTOOL_NG_VERSION: 'esp-2021r2'  # Gunakan fork Espressif untuk support target ESP
+  CROSSTOOL_NG_VERSION: 'esp-2021r2'
   CT_HOST_TRIPLET: 'aarch64-unknown-linux-gnu'
 
 jobs:
@@ -33,15 +33,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Verify runner architecture (ARM64)
-        run: |
-          echo "Architecture: $(uname -m)"
-          echo "Workspace: $GITHUB_WORKSPACE"
-
       - name: Set environment
         run: |
           echo "TARGET=${{ matrix.target }}" >> $GITHUB_ENV
-          echo "CT_PREFIX_DIR=$GITHUB_WORKSPACE/x-tools" >> $GITHUB_ENV  # PERBAIKAN: Gunakan $GITHUB_WORKSPACE
+          echo "CT_PREFIX_DIR=$GITHUB_WORKSPACE/x-tools" >> $GITHUB_ENV
           echo "CT_HOST_TRIPLET=${{ env.CT_HOST_TRIPLET }}" >> $GITHUB_ENV
           echo "CROSSTOOL_NG_VERSION=${{ env.CROSSTOOL_NG_VERSION }}" >> $GITHUB_ENV
 
@@ -50,7 +45,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ${{ env.CT_PREFIX_DIR }}  # Cache menggunakan CT_PREFIX_DIR
+            ${{ env.CT_PREFIX_DIR }}
             ~/.cache/ct-ng
           key: arm64-ctng-${{ matrix.target }}-${{ env.CROSSTOOL_NG_VERSION }}-${{ hashFiles('.github/workflows/build.yml') }}
 
@@ -62,13 +57,13 @@ jobs:
             build-essential autoconf bison flex texinfo help2man gawk \
             libtool libtool-bin libncurses5-dev \
             python3 python3-dev python3-distutils \
-            git wget unzip pkg-config ca-certificates gperf ninja-build cmake
+            git wget unzip pkg-config ca-certificates gperf ninja-build cmake \
+            file bzip2 xz-utils
           sudo ln -sf /usr/bin/python3 /usr/bin/python || true
 
       - name: Download and setup crosstool-NG (Espressif Fork)
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
-          # Gunakan fork Espressif yang sudah support target ESP
           git clone --depth=1 https://github.com/espressif/crosstool-NG.git -b $CROSSTOOL_NG_VERSION
           mv crosstool-NG crosstool-ng
           echo "Using Espressif fork ($CROSSTOOL_NG_VERSION) for ESP targets"
@@ -81,74 +76,115 @@ jobs:
           ./configure --enable-local
           make -j$(nproc)
           sudo make install
-          echo "crosstool-NG installed successfully"
+
+      - name: Download ESP-IDF toolchain configuration
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p esp-configs
+          # Download konfigurasi dari ESP-IDF repository
+          # Untuk target Xtensa (ESP32, ESP32-S2, ESP32-S3, ESP8266)
+          if [[ "$TARGET" == xtensa-* ]]; then
+            CONFIG_URL="https://raw.githubusercontent.com/espressif/esp-idf/master/tools/toolchain/$TARGET/crosstool.config"
+          # Untuk target RISC-V (ESP32-C3, ESP32-C6)
+          elif [[ "$TARGET" == riscv32-* ]]; then
+            CONFIG_URL="https://raw.githubusercontent.com/espressif/esp-idf/master/tools/toolchain/$TARGET/crosstool.config"
+          fi
+          
+          echo "Downloading config from: $CONFIG_URL"
+          if wget -q --spider "$CONFIG_URL"; then
+            wget -q -O esp-configs/$TARGET.config "$CONFIG_URL"
+            echo "Config downloaded successfully"
+          else
+            echo "WARNING: Config not found at $CONFIG_URL"
+            # Gunakan config dasar
+            cat > esp-configs/$TARGET.config << 'EOF'
+CT_EXPERIMENTAL=y
+CT_ALLOW_BUILD_AS_ROOT=y
+CT_ALLOW_BUILD_AS_ROOT_SURE=y
+CT_LOG_PROGRESS_BAR=n
+CT_LOG_LEVEL_MAX=INFO
+EOF
+          fi
 
       - name: Prepare configuration for ${{ matrix.target }}
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
           cd crosstool-ng
           
-          # Cari config untuk target ESP (di fork Espressif biasanya ada)
-          if [ -f "configs/${TARGET}/crosstool.config" ]; then
-            echo "Menggunakan konfigurasi untuk $TARGET"
-            cp "configs/${TARGET}/crosstool.config" .config
-          elif [ -f "samples/${TARGET}/crosstool.config" ]; then
-            echo "Menggunakan sample konfigurasi untuk $TARGET"
-            cp "samples/${TARGET}/crosstool.config" .config
+          # Gunakan config dari ESP-IDF jika ada
+          if [ -f "$GITHUB_WORKSPACE/esp-configs/$TARGET.config" ]; then
+            echo "Using ESP-IDF configuration for $TARGET"
+            cp "$GITHUB_WORKSPACE/esp-configs/$TARGET.config" .config
           else
-            echo "Konfigurasi tidak ditemukan, membuat dasar..."
-            # Buat config dasar menggunakan ct-ng
-            ./ct-ng ${TARGET} 2>/dev/null || true
-            
-            if [ ! -f ".config" ]; then
-              echo "Membuat konfigurasi manual..."
-              echo "CT_EXPERIMENTAL=y" > .config
-              echo "CT_ALLOW_BUILD_AS_ROOT=y" >> .config
-              echo "CT_ALLOW_BUILD_AS_ROOT_SURE=y" >> .config
-              echo "CT_LOG_PROGRESS_BAR=n" >> .config
-              echo "CT_LOG_LEVEL_MAX=INFO" >> .config
-            fi
+            echo "ERROR: No configuration found for $TARGET"
+            exit 1
           fi
           
-          # Update konfigurasi dengan pengaturan ARM64
-          echo "CT_TARGET=$TARGET" >> .config
+          # Tentukan CT_ARCH berdasarkan target
+          if [[ "$TARGET" == xtensa-* ]]; then
+            echo "CT_ARCH=\"xtensa\"" >> .config
+            echo "CT_ARCH_XTENSA_CORE=\"$(echo $TARGET | sed 's/xtensa-\(.*\)-elf/\1/')-lite\"" >> .config
+          elif [[ "$TARGET" == riscv32-* ]]; then
+            echo "CT_ARCH=\"riscv\"" >> .config
+            echo "CT_ARCH_RISCV_ARCH=\"rv32imafc\"" >> .config
+            echo "CT_ARCH_RISCV_ABI=\"ilp32f\"" >> .config
+          fi
+          
+          # Pengaturan wajib untuk build sukses
+          echo "CT_TARGET=\"$TARGET\"" >> .config
           echo "CT_PREFIX_DIR=\"${CT_PREFIX_DIR}\"" >> .config
           echo "CT_HOST=\"${CT_HOST_TRIPLET}\"" >> .config
           echo "CT_KERNEL_BARE_METAL=y" >> .config
           echo "CT_LIBC_NEWLIB=y" >> .config
           echo "CT_CC_LANG_CXX=y" >> .config
+          echo "CT_CC_GCC_EXTRA_CONFIG_ARRAY=\"\"" >> .config
+          echo "CT_BINUTILS_EXTRA_CONFIG_ARRAY=\"\"" >> .config
+          echo "CT_ARCH_ARCH=\"\"" >> .config
+          echo "CT_ARCH_TUNE=\"\"" >> .config
+          echo "CT_ARCH_CPU=\"\"" >> .config
           
-          # Hapus duplikasi
+          # Hapus duplikasi dan blank lines
           sort -u .config -o .config
-          cp .config "$GITHUB_WORKSPACE/.config-$TARGET"
+          sed -i '/^$/d' .config
           
-          echo "Konfigurasi disimpan: .config-$TARGET"
+          # Validasi konfigurasi
+          echo "Validating configuration..."
+          if ! ./ct-ng show-config > /dev/null 2>&1; then
+            echo "ERROR: Configuration validation failed"
+            echo "First 50 lines of config:"
+            head -50 .config
+            exit 1
+          fi
+          
+          cp .config "$GITHUB_WORKSPACE/.config-$TARGET-final"
+          echo "Final configuration saved"
 
       - name: Build toolchain ${{ matrix.target }}
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
           cd crosstool-ng
-          
-          # PERBAIKAN: Gunakan $GITHUB_WORKSPACE sebagai HOME
           export HOME=$GITHUB_WORKSPACE
           
-          # PERBAIKAN: Buat direktori dengan path yang benar (relative to workspace)
-          echo "CT_PREFIX_DIR: ${CT_PREFIX_DIR}"
+          # Buat direktori output
           mkdir -p "${CT_PREFIX_DIR}"
           
-          echo "Memulai build $TARGET..."
+          echo "Building $TARGET..."
           
-          # Coba build dengan jumlah core yang tersedia
-          ./ct-ng build.$(nproc) 2>&1 | tee build-$TARGET.log || {
-            echo "Build gagal, coba metode standar..."
-            ./ct-ng build 2>&1 | tee build-$TARGET-alt.log || {
-              echo "Build alternatif juga gagal, cek error..."
-              tail -100 build-$TARGET-alt.log
-              exit 1
-            }
-          }
+          # Tampilkan info konfigurasi penting
+          echo "Important config values:"
+          grep -E "CT_ARCH|CT_TARGET|CT_HOST|CT_PREFIX_DIR" .config || true
           
-          echo "Build $TARGET selesai"
+          # Build dengan verbose output untuk debugging
+          ./ct-ng build 2>&1 | tee build.log
+          
+          # Cek status build
+          if [ ${PIPESTATUS[0]} -eq 0 ]; then
+            echo "Build $TARGET successful!"
+          else
+            echo "Build $TARGET failed. Last 100 lines of log:"
+            tail -100 build.log
+            exit 1
+          fi
 
       - name: Verify and package toolchain
         id: package
@@ -156,27 +192,27 @@ jobs:
           # Verifikasi toolchain
           TOOLCHAIN_BIN="${CT_PREFIX_DIR}/${TARGET}/bin/${TARGET}-gcc"
           if [ -f "$TOOLCHAIN_BIN" ]; then
-            echo "Toolchain $TARGET berhasil dibangun"
+            echo "Toolchain $TARGET built successfully"
             "$TOOLCHAIN_BIN" --version | head -1
+            
+            # Test compile sederhana
+            echo 'int main() { return 0; }' > test.c
+            "$TOOLCHAIN_BIN" -o test.elf test.c
+            if [ -f "test.elf" ]; then
+              echo "Test compilation successful"
+              rm test.c test.elf
+            fi
           else
-            echo "ERROR: Toolchain tidak ditemukan"
-            echo "Mencari di ${CT_PREFIX_DIR}..."
-            find "${CT_PREFIX_DIR}" -name "*gcc" -type f 2>/dev/null || true
+            echo "ERROR: Toolchain not found at $TOOLCHAIN_BIN"
+            echo "Checking directory contents..."
+            find "${CT_PREFIX_DIR}" -type f -name "*gcc*" 2>/dev/null || true
             exit 1
           fi
           
           # Package toolchain
           mkdir -p artifacts
           ASSET="${TARGET}-host-arm64.tar.gz"
-          if [ -d "${CT_PREFIX_DIR}/${TARGET}" ]; then
-            tar -czf "artifacts/${ASSET}" -C "${CT_PREFIX_DIR}" "${TARGET}"
-            echo "Toolchain dipackage: ${ASSET}"
-          else
-            echo "ERROR: Direktori toolchain tidak ditemukan"
-            exit 1
-          fi
-          
-          # Generate checksum
+          tar -czf "artifacts/${ASSET}" -C "${CT_PREFIX_DIR}" "${TARGET}"
           sha256sum "artifacts/${ASSET}" > "artifacts/${ASSET}.sha256"
           echo "asset_name=${ASSET}" >> $GITHUB_OUTPUT
           echo "asset_path=artifacts/${ASSET}" >> $GITHUB_OUTPUT
@@ -194,22 +230,15 @@ jobs:
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-          
-      - name: Generate build summary
+      - name: Generate summary
         run: |
-          echo "# Build Summary - ESP-IDF Toolchains" > summary.md
-          echo "Build selesai: $(date)" >> summary.md
-          echo "" >> summary.md
-          if [ -d "artifacts" ]; then
-            echo "## Artifacts yang dihasilkan:" >> summary.md
-            find artifacts -name "*.tar.gz" -type f | sort | while read f; do
-              echo "- $(basename "$f")" >> summary.md
-            done
-          else
-            echo "Tidak ada artifacts" >> summary.md
-          fi
+          echo "# Build Summary" > summary.md
+          echo "Completed at: $(date)" >> summary.md
+          echo "Workflow: ${{ github.workflow }}" >> summary.md
+          echo "## Targets built:" >> summary.md
+          echo "- xtensa-esp32-elf" >> summary.md
+          echo "- xtensa-esp32s2-elf" >> summary.md
+          echo "- xtensa-esp32s3-elf" >> summary.md
+          echo "- xtensa-lx106-elf" >> summary.md
+          echo "- riscv32-esp-elf" >> summary.md
           cat summary.md
