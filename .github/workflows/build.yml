@@ -1,4 +1,4 @@
-name: Build ESP-IDF Toolchains (ARM64 Host) - Final
+name: Build ESP-IDF Toolchains (ARM64 Host) - Final Fixed
 
 on:
   push:
@@ -126,7 +126,7 @@ jobs:
             
             # CRITICAL: For ESP32, use bare-metal (no Linux kernel)
             echo "CT_KERNEL_NONE=y" >> .config
-            echo "CT_KERNEL=\"none\"" >> .config
+            echo "CT_KERNEL=\"none\"" >> .config  # FIXED: Added CT_KERNEL
             
             echo "CT_LIBC_NEWLIB=y" >> .config
             echo "CT_CC_LANG_CXX=y" >> .config
@@ -156,16 +156,6 @@ jobs:
             if [[ "$TARGET" == *"esp32"* ]]; then
               echo "CT_ARCH_XTENSA_CORE=\"esp32\"" >> .config
             fi
-            if [[ "$TARGET" == *"esp32s2"* ]]; then
-              echo "CT_ARCH_XTENSA_CORE=\"esp32s2\"" >> .config
-            fi
-            if [[ "$TARGET" == *"esp32s3"* ]]; then
-              echo "CT_ARCH_XTENSA_CORE=\"esp32s3\"" >> .config
-            fi
-          elif [[ "$TARGET" == "riscv32-"* ]]; then
-            echo "CT_ARCH=\"riscv\"" >> .config
-            echo "CT_ARCH_RISCV=y" >> .config
-            echo "CT_ARCH_32=y" >> .config
           fi
           
           # Set common configurations
@@ -187,6 +177,9 @@ jobs:
           echo "CT_CC_GCC_USE_LTO=n" >> .config
           
           echo "=== KONFIGURASI YANG DIBUAT ==="
+          echo "Isi .config:"
+          cat .config
+          echo ""
           echo "Target: $(grep CT_TARGET .config)"
           echo "Arch: $(grep CT_ARCH .config)"
           echo "Kernel: $(grep CT_KERNEL .config)"
@@ -205,10 +198,15 @@ jobs:
           fi
           
           # Check critical settings
-          grep -q "CT_TARGET=" .config || (echo "ERROR: CT_TARGET tidak diatur!" && exit 1)
-          grep -q "CT_ARCH=" .config || (echo "ERROR: CT_ARCH tidak diatur!" && exit 1)
-          grep -q "CT_HOST=" .config || (echo "ERROR: CT_HOST tidak diatur!" && exit 1)
-          grep -q "CT_KERNEL=" .config || (echo "ERROR: CT_KERNEL tidak diatur!" && exit 1)
+          echo "Memeriksa pengaturan kritis..."
+          for setting in CT_TARGET CT_ARCH CT_HOST CT_KERNEL CT_PREFIX_DIR CT_LOCAL_TARBALLS_DIR; do
+            if grep -q "^$setting=" .config; then
+              echo "✓ $setting ditemukan: $(grep "^$setting=" .config)"
+            else
+              echo "✗ ERROR: $setting tidak diatur dalam .config!"
+              exit 1
+            fi
+          done
           
           # Ensure kernel is set to "none" for bare-metal
           if grep -q 'CT_KERNEL="linux"' .config; then
@@ -286,6 +284,7 @@ jobs:
 
       - name: Test and package toolchain
         if: steps.build.outputs.success == 'true'
+        id: package
         run: |
           echo "=== TEST DAN PACKAGE TOOLCHAIN ==="
           
@@ -379,7 +378,7 @@ jobs:
           echo "========================================"
           echo "🚀 Toolchain $TARGET berhasil dibangun!"
           echo "📁 Lokasi: $CT_PREFIX_DIR/$TARGET"
-          echo "📦 Archive: ${{ steps.package.outputs.asset_name || 'N/A' }}"
+          echo "📦 Archive: ${{ steps.package.outputs.artifact_name || 'N/A' }}"
           echo "========================================"
 
       - name: Notify failure
