@@ -8,7 +8,7 @@ on:
         required: true
         default: false
         type: boolean
-      release:
+      release_tag:
         description: 'Release tag / name (example: v1.0.0)'
         required: true
         type: string
@@ -22,25 +22,7 @@ env:
   CT_PREFIX_DIR: '/github/workspace/x-tools'
 
 jobs:
-  prepare:
-    runs-on: ubuntu-latest
-    outputs:
-      upload_url: ${{ steps.create_release.outputs.upload_url }}
-    steps:
-      - name: Create GitHub Release
-        id: create_release
-        if: ${{ github.event.inputs.do_release == 'true' }}
-        uses: ncipollo/release-action@v1
-        with:
-          tag: ${{ github.event.inputs.release }}
-          name: ${{ github.event.inputs.release }}
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
   compile:
-    needs: prepare
     runs-on: ubuntu-22.04-arm
     continue-on-error: true
 
@@ -54,6 +36,9 @@ jobs:
           - xtensa-esp32s3-elf
           - xtensa-lx106-elf
           - riscv32-esp-elf
+
+    outputs:
+      assets: ${{ steps.package.outputs.assets_json }}
 
     steps:
       - name: Checkout repository
@@ -108,21 +93,16 @@ jobs:
         run: |
           cd crosstool-ng-${CROSSTOOL_NG_VERSION}
           ./ct-ng $TARGET
-
+          
           echo "CT_PREFIX_DIR=\"${CT_PREFIX_DIR}\"" >> .config
           echo "CT_HOST=\"${CT_HOST_TRIPLET}\"" >> .config
-
           echo "CT_KERNEL_BARE_METAL=y" >> .config
           echo "CT_LIBC_NEWLIB=y" >> .config
           echo "CT_LIBC=\"newlib\"" >> .config
-
           echo "CT_CC_LANG_CXX=y" >> .config
           echo "CT_LOG_PROGRESS_BAR=n" >> .config
-
+          
           cp .config $GITHUB_WORKSPACE/.config-${TARGET}
-          echo "---- .config tail ----"
-          tail -n 60 .config || true
-          echo "---- end .config ----"
 
       - name: Build toolchain ${{ matrix.target }}
         if: steps.cache.outputs.cache-hit != 'true'
@@ -158,30 +138,80 @@ jobs:
             tar -C "${CT_PREFIX_DIR}" -czf "artifacts/${ASSET}" .
           fi
           sha256sum "artifacts/${ASSET}" > "artifacts/${ASSET}.sha256"
-          echo "asset=${ASSET}" >> $GITHUB_OUTPUT
-          echo "asset_path=artifacts/${ASSET}" >> $GITHUB_OUTPUT
+          
+          # Create JSON array of assets for release
+          ASSET_PATH="artifacts/${ASSET}"
+          ASSETS_JSON="[{\"name\":\"${ASSET}\",\"path\":\"${ASSET_PATH}\"},{\"name\":\"${ASSET}.sha256\",\"path\":\"${ASSET_PATH}.sha256\"}]"
+          echo "assets_json=${ASSETS_JSON}" >> $GITHUB_OUTPUT
+          
+          echo "asset_name=${ASSET}" >> $GITHUB_OUTPUT
+          echo "asset_path=${ASSET_PATH}" >> $GITHUB_OUTPUT
 
       - name: Upload artifact (CI)
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.package.outputs.asset }}
+          name: ${{ steps.package.outputs.asset_name }}
           path: |
             ${{ steps.package.outputs.asset_path }}
             ${{ steps.package.outputs.asset_path }}.sha256
 
-      - name: Upload to GitHub Release
-        if: ${{ github.event.inputs.do_release == 'true' }}
-        uses: actions/upload-release-asset@v1
+  release:
+    needs: compile
+    if: ${{ github.event.inputs.do_release == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
         with:
-          upload_url: ${{ needs.prepare.outputs.upload_url }}
-          asset_path: ${{ steps.package.outputs.asset_path }}
-          asset_name: ${{ steps.package.outputs.asset }}
-          asset_content_type: application/gzip
+          path: artifacts
+          
+      - name: Create Release
+        id: create_release
+        uses: actions/github-script@v7
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.event.inputs.release_tag }}
+        with:
+          script: |
+            const { data: release } = await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: process.env.RELEASE_TAG,
+              name: process.env.RELEASE_TAG,
+              draft: false,
+              prerelease: false
+            });
+            return release.upload_url;
+
+      - name: Upload Release Assets
+        uses: actions/github-script@v7
+        env:
+          UPLOAD_URL: ${{ steps.create_release.outputs.result }}
+        with:
+          script: |
+            const fs = require('fs').promises;
+            const path = require('path');
+            
+            const artifactsDir = 'artifacts';
+            const files = await fs.readdir(artifactsDir);
+            
+            for (const file of files) {
+              if (file.endsWith('.tar.gz') || file.endsWith('.sha256')) {
+                const filePath = path.join(artifactsDir, file);
+                const fileBuffer = await fs.readFile(filePath);
+                const fileBase64 = fileBuffer.toString('base64');
+                
+                await github.rest.repos.uploadReleaseAsset({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  release_id: context.release.id,
+                  name: file,
+                  data: fileBase64
+                });
+              }
+            }
 
   summary:
-    needs: [prepare, compile]
+    needs: [compile, release]
     if: ${{ github.event.inputs.do_release == 'true' }}
     runs-on: ubuntu-latest
     steps:
@@ -193,17 +223,36 @@ jobs:
       - name: Generate checksum summary
         run: |
           echo "# ESP-IDF Toolchain Checksums" > summary.md
+          echo "" >> summary.md
+          echo "## Release: ${{ github.event.inputs.release_tag }}" >> summary.md
+          echo "" >> summary.md
           echo '```' >> summary.md
           find artifacts -name "*.sha256" | sort | while read f; do
             cat "$f" >> summary.md
             echo "" >> summary.md
           done
           echo '```' >> summary.md
-
-      - name: Update release body
-        uses: ncipollo/release-action@v1
+          
+      - name: Update release description
+        uses: actions/github-script@v7
         with:
-          allowUpdates: true
-          tag: ${{ github.event.inputs.release }}
-          bodyFile: summary.md
-          token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const summary = fs.readFileSync('summary.md', 'utf8');
+            
+            // Get the release we just created
+            const { data: releases } = await github.rest.repos.listReleases({
+              owner: context.repo.owner,
+              repo: context.repo.repo
+            });
+            
+            const currentRelease = releases.find(r => r.tag_name === '${{ github.event.inputs.release_tag }}');
+            
+            if (currentRelease) {
+              await github.rest.repos.updateRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                release_id: currentRelease.id,
+                body: summary
+              });
+            }
