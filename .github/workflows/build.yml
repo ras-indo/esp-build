@@ -1,5 +1,5 @@
 
-name: Build ESP-IDF Toolchains (ARM64 Host) - SUCCESS FINAL
+name: Build ESP-IDF Toolchains (Termux Static) - FINAL
 
 on:
   push:
@@ -38,7 +38,6 @@ jobs:
       - name: Set Environment Variables
         run: |
           echo "TARGET=${{ matrix.target }}" >> $GITHUB_ENV
-          # Pisahkan folder instalasi agar rapi
           echo "CT_PREFIX_DIR=$GITHUB_WORKSPACE/x-tools/${{ matrix.target }}" >> $GITHUB_ENV
           echo "CT_HOST_TRIPLET=${{ env.CT_HOST_TRIPLET }}" >> $GITHUB_ENV
           echo "CROSSTOOL_NG_VERSION=${{ env.CROSSTOOL_NG_VERSION }}" >> $GITHUB_ENV
@@ -91,13 +90,13 @@ jobs:
           # ISL Mirror Fix
           wget --tries=5 --waitretry=5 -O isl-0.19.tar.bz2 https://sources.easybuild.io/i/ISL/isl-0.19.tar.bz2
           
-          # Cek file lainnya (Optional, ct-ng akan download sendiri jika kurang)
+          # Fallback
           if [ ! -s isl-0.19.tar.bz2 ]; then
              rm -f isl-0.19.tar.bz2
              wget --tries=5 -O isl-0.19.tar.bz2 https://libisl.sourceforge.io/isl-0.19.tar.bz2
           fi
 
-      - name: Konfigurasi Toolchain
+      - name: Konfigurasi Toolchain (STATIC MODE)
         run: |
           cd $WORKSPACE/crosstool-ng
           
@@ -108,7 +107,7 @@ jobs:
             ./ct-ng $TARGET
           fi
 
-          # Hapus variabel yang akan kita override
+          # Hapus variabel default
           sed -i '/CT_PREFIX_DIR/d' .config
           sed -i '/CT_LOCAL_TARBALLS_DIR/d' .config
           sed -i '/CT_HOST/d' .config
@@ -119,31 +118,50 @@ jobs:
           sed -i '/CT_GDB_CROSS_PYTHON_BINARY/d' .config
           sed -i '/CT_OVERLAY_LOCATION/d' .config
           sed -i '/CT_OVERLAY_NAME/d' .config
+          # Hapus setting static default jika ada, kita set ulang di bawah
+          sed -i '/CT_STATIC_TOOLCHAIN/d' .config
+          sed -i '/CT_WANTS_STATIC_LINK/d' .config
 
-          # Inject konfigurasi yang benar
+          # Inject konfigurasi KHUSUS TERMUX
           cat >> .config <<EOF
           
-          # CI Overrides
+          # CI Basics
           CT_TARGET="$TARGET"
           CT_ARCH="xtensa"
           CT_ARCH_XTENSA=y
           
-          # FIX NAMA TUPLE: Set vendor jadi "esp32" agar hasilnya xtensa-esp32-elf-...
+          # Naming
           CT_TARGET_VENDOR="esp32"
           
+          # Overlay
           CT_OVERLAY_NAME="esp32"
           CT_OVERLAY_LOCATION="$WORKSPACE/crosstool-ng/overlays"
           
+          # Paths
           CT_HOST="$CT_HOST_TRIPLET"
           CT_PREFIX_DIR="$CT_PREFIX_DIR"
           CT_LOCAL_TARBALLS_DIR="$CT_LOCAL_TARBALLS_DIR"
           
+          # Build Settings
           CT_PARALLEL_JOBS=$(nproc)
           CT_LOG_PROGRESS_BAR=n
           CT_EXPERIMENTAL=y
           CT_ALLOW_BUILD_AS_ROOT=y
           CT_ALLOW_BUILD_AS_ROOT_SURE=y
-          CT_GDB_CROSS_PYTHON_BINARY="python3"
+
+          # === BAGIAN PENTING UNTUK TERMUX ===
+          # Memaksa hasil build menjadi 'Statically Linked'
+          # Ini membuat binary tidak butuh /lib/ld-linux-aarch64.so.1
+          CT_STATIC_TOOLCHAIN=y
+          CT_WANTS_STATIC_LINK=y
+          
+          # Strip binary agar ukuran lebih kecil
+          CT_STRIP_HOST_TOOLCHAIN_EXECUTABLES=y
+          
+          # Matikan Python GDB (Python static sangat susah di-build)
+          CT_GDB_CROSS_PYTHON=n
+          CT_GDB_CROSS_PYTHON_BINARY=""
+          # ===================================
           EOF
 
           # ESP32 Specific Kernel/Core Fixes
@@ -171,7 +189,7 @@ jobs:
           export CT_ALLOW_BUILD_AS_ROOT_SURE=y
           export HOME=$WORKSPACE
           
-          echo "Memulai build... (Estimasi: 45-60 menit)"
+          echo "Memulai build STATIC... (Estimasi: 50-70 menit)"
           ./ct-ng build
           
           echo "success=true" >> $GITHUB_OUTPUT
@@ -182,39 +200,41 @@ jobs:
         run: |
           echo "=== VALIDASI HASIL BUILD ==="
           
-          # Cari folder bin
           BIN_DIR="$CT_PREFIX_DIR/bin"
           
           if [ ! -d "$BIN_DIR" ]; then
-             echo "FATAL: Folder bin tidak ditemukan di $CT_PREFIX_DIR"
-             ls -R "$(dirname "$CT_PREFIX_DIR")"
+             echo "FATAL: Folder bin tidak ditemukan"
              exit 1
           fi
           
-          # Cari file GCC secara dinamis (mengantisipasi perbedaan nama tuple)
           FOUND_GCC=$(find "$BIN_DIR" -name "*-gcc" -type f | head -n 1)
           
           if [ -z "$FOUND_GCC" ]; then
-             echo "FATAL: Binary GCC tidak ditemukan di $BIN_DIR"
-             echo "Isi folder bin:"
-             ls -la "$BIN_DIR"
+             echo "FATAL: Binary GCC tidak ditemukan"
              exit 1
           fi
           
           echo "✅ Binary GCC ditemukan: $FOUND_GCC"
+          
+          # Cek apakah benar-benar static
+          FILE_INFO=$(file "$FOUND_GCC")
+          echo "File Info: $FILE_INFO"
+          
+          if [[ "$FILE_INFO" != *"statical"* && "$FILE_INFO" != *"static-pie"* ]]; then
+             echo "WARNING: Sepertinya binary BUKAN static. Cek log config."
+          else
+             echo "✅ VERIFIKASI SUKSES: Binary adalah STATIC (Support Termux)"
+          fi
+          
           "$FOUND_GCC" --version | head -1
           
           # Setup nama artifact
-          ARTIFACT_NAME="${TARGET}-gcc8_4_0-${CROSSTOOL_NG_VERSION}-linux-arm64.tar.gz"
+          # Tambahkan 'static-termux' di nama file agar jelas
+          ARTIFACT_NAME="${TARGET}-gcc8_4_0-${CROSSTOOL_NG_VERSION}-linux-arm64-static-termux.tar.gz"
           
           echo "Membuat arsip $ARTIFACT_NAME..."
-          # Masuk ke direktori parent dari prefix untuk packaging
-          # Struktur dalam tar.gz akan menjadi: xtensa-esp32-elf/bin/...
           cd "$GITHUB_WORKSPACE/x-tools"
-          
-          # Kita ambil nama folder target yang sebenarnya dibuat oleh ct-ng
           ACTUAL_TARGET_DIR=$(basename "$CT_PREFIX_DIR")
-          
           tar -czf "$WORKSPACE/artifacts/$ARTIFACT_NAME" "$ACTUAL_TARGET_DIR"
           
           echo "✅ Artifact berhasil dibuat: $WORKSPACE/artifacts/$ARTIFACT_NAME"
@@ -224,7 +244,7 @@ jobs:
         if: steps.build.outputs.success == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.target }}-arm64
+          name: ${{ matrix.target }}-static-termux
           path: ${{ env.WORKSPACE }}/artifacts/
           retention-days: 30
 
