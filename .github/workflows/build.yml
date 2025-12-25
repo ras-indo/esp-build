@@ -1,4 +1,5 @@
-name: Build ESP-IDF Native Android (Alpine/Musl) - NO PROOT
+
+name: Build ESP-IDF Native Android (Alpine Static) - FINAL
 
 on:
   push:
@@ -11,193 +12,195 @@ permissions:
 
 env:
   CROSSTOOL_NG_VERSION: 'esp-2021r2'
-  # Kita set host generic linux, tapi karena build di Alpine, hasilnya Musl.
-  CT_HOST_TRIPLET: 'aarch64-alpine-linux-musl'
 
 jobs:
-  compile-alpine:
-    # Kita tetap butuh runner ARM
+  build-native-static:
+    # Menggunakan runner ARM64 native
     runs-on: ubuntu-22.04-arm
-    timeout-minutes: 360
     
-    # KUNCI RAHASIA: Jalankan semua proses di dalam Container Alpine
-    # Alpine 3.15 dipilih karena kompatibilitas GCC 8.4 lebih baik dibanding Alpine terbaru
+    # Menjalankan job di dalam Container Alpine Linux (Musl Libc)
+    # Kita gunakan versi 3.17 agar kompatibel dengan source code GCC 8.4
     container:
-      image: alpine:3.15
+      image: alpine:3.17
+      options: --privileged
 
-    strategy:
-      fail-fast: false
-      matrix:
-        target:
-          - xtensa-esp32-elf
+    timeout-minutes: 360
 
     steps:
-      - name: Install Dependencies (Alpine)
+      - name: 1. Install Dependencies Alpine
         run: |
           echo "Installing build dependencies..."
           apk update
+          
+          # Install toolchain dasar dan library static
           apk add --no-cache \
-            build-base git bash bison flex gawk help2man texinfo \
-            ncurses-dev python3-dev unzip wget bzip2 xz \
-            libtool automake autoconf shadow patch \
-            linux-headers tar gzip curl
-            
-          # Fix python link
+            build-base git bash autoconf automake bison flex texinfo \
+            gawk libtool ncurses-dev ncurses-static python3-dev \
+            unzip wget bzip2 xz help2man file rsync patch \
+            expat-dev expat-static zlib-dev zlib-static \
+            linux-headers gettext-dev gettext-static libiconv-dev
+
+          # Pastikan python mengarah ke python3
           ln -sf /usr/bin/python3 /usr/bin/python
-
-      # Github Actions checkout butuh nodejs, tapi di alpine agak ribet.
-      # Kita pakai git manual saja agar lebih hemat dan cepat di container.
-      - name: Checkout Source
-        run: |
-          echo "Cloning repository..."
-          # Clone crosstool-NG khusus Espressif
-          git clone https://github.com/espressif/crosstool-NG.git -b $CROSSTOOL_NG_VERSION crosstool-ng
           
-          # Setup direktori output
+          # Cek versi gcc host
+          gcc --version
+
+      - name: 2. Checkout & Setup Workspace
+        uses: actions/checkout@v4
+      
+      - name: 3. Setup Permissions & Directories
+        run: |
+          # Fix permission error "dubious ownership" di git
+          git config --global --add safe.directory '*'
+          
+          # Buat struktur folder
           mkdir -p x-tools artifacts .build/tarballs
-
-      - name: Setup Environment Variables
-        run: |
-          # Definisikan path absolut
-          export WORKSPACE=$PWD
-          echo "WORKSPACE=$PWD" >> $GITHUB_ENV
-          echo "CT_PREFIX_DIR=$PWD/x-tools/${{ matrix.target }}" >> $GITHUB_ENV
-          echo "CT_LOCAL_TARBALLS_DIR=$PWD/.build/tarballs" >> $GITHUB_ENV
           
-          # Tambahkan user non-root (ct-ng tidak suka root, meski bisa dipaksa)
-          useradd -m -s /bin/bash builder
-          chown -R builder:builder $PWD
+          # Simpan path root ke ENV agar konsisten
+          echo "ROOT_DIR=$GITHUB_WORKSPACE" >> $GITHUB_ENV
 
-      - name: Install crosstool-NG
-        shell: bash
+      - name: 4. Download crosstool-NG
         run: |
-          cd crosstool-ng
+          cd $ROOT_DIR
+          echo "Cloning crosstool-NG branch: $CROSSTOOL_NG_VERSION"
+          git clone https://github.com/espressif/crosstool-NG.git -b $CROSSTOOL_NG_VERSION
+          
+          cd crosstool-NG
           git submodule update --init --recursive
           
-          # Patch kecil untuk musl jika diperlukan (opsional, biasanya ct-ng urus sendiri)
-          
+          # Install crosstool-ng
           ./bootstrap
-          ./configure --enable-local
+          ./configure --enable-local --prefix=/usr/local
           make -j$(nproc)
-          
-          # Kita tidak install ke /usr/bin, pakai lokal saja biar tidak butuh sudo
-          
-      - name: Download Manual Library (ISL Fix)
-        shell: bash
+          make install
+
+      - name: 5. Download Library Manual (ISL Fix)
         run: |
-          cd $CT_LOCAL_TARBALLS_DIR
-          wget --tries=5 -O isl-0.19.tar.bz2 https://sources.easybuild.io/i/ISL/isl-0.19.tar.bz2 || \
+          # Download ISL library manual karena server sering down
+          mkdir -p $ROOT_DIR/.build/tarballs
+          cd $ROOT_DIR/.build/tarballs
+          
+          echo "Downloading ISL 0.19..."
+          wget --tries=5 --waitretry=5 -O isl-0.19.tar.bz2 https://sources.easybuild.io/i/ISL/isl-0.19.tar.bz2 || \
           wget --tries=5 -O isl-0.19.tar.bz2 https://libisl.sourceforge.io/isl-0.19.tar.bz2
 
-      - name: Konfigurasi Toolchain (MUSL STATIC)
-        shell: bash
+      - name: 6. Konfigurasi Toolchain (Alpine/Musl Static)
         run: |
-          cd crosstool-ng
+          cd $ROOT_DIR/crosstool-NG
           
-          # Buat config awal
-          ./ct-ng ${{ matrix.target }}
+          TARGET="xtensa-esp32-elf"
           
-          # Hapus setting lama
+          # Generate config awal
+          ./ct-ng $TARGET
+          
+          # Bersihkan setting path hardcoded dari sample
           sed -i '/CT_PREFIX_DIR/d' .config
           sed -i '/CT_LOCAL_TARBALLS_DIR/d' .config
           sed -i '/CT_LOG_PROGRESS_BAR/d' .config
           sed -i '/CT_STATIC_TOOLCHAIN/d' .config
-          sed -i '/CT_WANTS_STATIC_LINK/d' .config
-
-          # Inject Config Khusus Alpine/Android
+          
+          # INJECT CONFIGURASI KHUSUS ALPINE STATIC
           cat >> .config <<EOF
           
-          # Paths
-          CT_PREFIX_DIR="${{ env.CT_PREFIX_DIR }}"
-          CT_LOCAL_TARBALLS_DIR="${{ env.CT_LOCAL_TARBALLS_DIR }}"
+          # --- PATHS ---
+          CT_PREFIX_DIR="${ROOT_DIR}/x-tools/${TARGET}"
+          CT_LOCAL_TARBALLS_DIR="${ROOT_DIR}/.build/tarballs"
           
-          # Build Options
-          CT_PARALLEL_JOBS=$(nproc)
-          CT_LOG_PROGRESS_BAR=n
-          CT_EXPERIMENTAL=y
+          # --- BUILD ENVIRONMENT ---
           CT_ALLOW_BUILD_AS_ROOT=y
           CT_ALLOW_BUILD_AS_ROOT_SURE=y
+          CT_EXPERIMENTAL=y
+          CT_LOG_PROGRESS_BAR=n
+          CT_PARALLEL_JOBS=$(nproc)
           
-          # === STATIC MUSL SETTINGS ===
-          # Karena kita build di Alpine (Musl), opsi ini membuat 
-          # compiler yang dihasilkan juga Static & linked ke Musl.
+          # --- TARGET DEFINITION ---
+          CT_ARCH="xtensa"
+          CT_TARGET_VENDOR="esp32"
+          CT_ARCH_XTENSA_CORE="esp32"
+          CT_OVERLAY_NAME="esp32"
+          CT_OVERLAY_LOCATION="${ROOT_DIR}/crosstool-NG/overlays"
+          
+          # --- STATIC LINKING (MUSL) ---
+          # Ini bagian paling penting agar jalan di Android native
           CT_STATIC_TOOLCHAIN=y
           CT_WANTS_STATIC_LINK=y
+          CT_CC_CX_LDFLAGS="-static"
           
-          # Strip agar kecil
+          # Strip binary agar tidak terlalu besar
           CT_STRIP_HOST_TOOLCHAIN_EXECUTABLES=y
           
-          # MATIKAN fitur yang butuh glibc spesifik / dynamic loading
+          # --- GDB (NO PYTHON) ---
+          # Python static build hampir mustahil stabil
           CT_GDB_CROSS_PYTHON=n
           CT_GDB_CROSS_PYTHON_BINARY=""
+          
           EOF
           
-          # ESP32 Specifics
-          if ! grep -q "CT_ARCH_XTENSA_CORE" .config; then
-             echo 'CT_ARCH_XTENSA_CORE="esp32"' >> .config
+          # Fix Kernel (Set none agar tidak bergantung versi kernel host)
+          if grep -q "CT_KERNEL" .config; then
+             sed -i 's/^CT_KERNEL=.*/CT_KERNEL="none"/' .config
+          else
+             echo 'CT_KERNEL="none"' >> .config
           fi
-          sed -i 's/^CT_KERNEL=.*/CT_KERNEL="none"/' .config
 
+          # Update config
           yes "" | ./ct-ng oldconfig
 
-      - name: Build Toolchain
+      - name: 7. Build Toolchain
         id: build
-        shell: bash
         run: |
-          cd crosstool-ng
+          cd $ROOT_DIR/crosstool-NG
           
-          # Paksa environment variable untuk build
+          # Set permission environment variable lagi untuk memastikan
           export CT_ALLOW_BUILD_AS_ROOT=y
           export CT_ALLOW_BUILD_AS_ROOT_SURE=y
           
-          echo "Memulai Build di Alpine..."
+          echo "Starting Build Process... This may take 60+ minutes."
           ./ct-ng build
           
           echo "success=true" >> $GITHUB_OUTPUT
 
-      - name: Package Results
+      - name: 8. Verifikasi & Packaging
         if: steps.build.outputs.success == 'true'
-        shell: bash
         run: |
-          echo "Verifikasi Binary..."
-          GCC_BIN="${{ env.CT_PREFIX_DIR }}/bin/${{ matrix.target }}-gcc"
+          TARGET="xtensa-esp32-elf"
+          BIN_DIR="$ROOT_DIR/x-tools/$TARGET/bin"
           
-          if [ -f "$GCC_BIN" ]; then
-             echo "Binary ditemukan!"
-             # Cek tipe file (harus statically linked)
-             file "$GCC_BIN"
-             # Cek version
-             "$GCC_BIN" --version | head -1
+          echo "=== VERIFIKASI BINARY ==="
+          ls -l $BIN_DIR/xtensa-esp32-elf-gcc
+          
+          # Cek tipe file (Harus: statically linked)
+          FILE_TYPE=$(file $BIN_DIR/xtensa-esp32-elf-gcc)
+          echo "File Type: $FILE_TYPE"
+          
+          if [[ "$FILE_TYPE" != *"statically linked"* ]]; then
+             echo "WARNING: Binary sepertinya tidak static!"
           else
-             echo "FATAL: GCC tidak ditemukan!"
-             exit 1
+             echo "SUCCESS: Binary adalah STATICALLY LINKED (Support Android Native)"
           fi
+          
+          # Packaging
+          ARTIFACT_NAME="${TARGET}-gcc8_4_0-musl-static-android.tar.gz"
+          cd "$ROOT_DIR/x-tools"
+          
+          # Gunakan tar biasa (Alpine tar aman untuk ini)
+          tar -czf "$ROOT_DIR/artifacts/$ARTIFACT_NAME" $TARGET
+          
+          echo "ARTIFACT_PATH=$ROOT_DIR/artifacts/$ARTIFACT_NAME" >> $GITHUB_ENV
 
-          # Packaging dengan TAR biasa (bukan 7z agar kompatibel)
-          # Kita gunakan flag --hard-dereference agar saat diekstrak nanti
-          # tidak jadi hardlink (menghindari error 'operation not permitted' di Android)
-          
-          ARTIFACT_NAME="${{ matrix.target }}-gcc8_4_0-musl-static-android.tar.gz"
-          cd x-tools
-          
-          # Trik: gunakan transform untuk ubah hardlink jadi file copy saat tar
-          # Atau simply tar biasa, nanti user ekstrak pakai proot jika perlu, 
-          # TAPI Musl static biasanya aman tanpa proot.
-          tar -czf "$WORKSPACE/artifacts/$ARTIFACT_NAME" --hard-dereference ${{ matrix.target }}
-          
-          echo "artifact_name=$ARTIFACT_NAME" >> $GITHUB_OUTPUT
-
-      - name: Upload Artifact
+      - name: 9. Upload Artifact
         if: steps.build.outputs.success == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.target }}-android-native
-          path: artifacts/
+          name: xtensa-esp32-elf-android-native
+          path: ${{ env.ARTIFACT_PATH }}
           retention-days: 30
 
-      - name: Upload Logs on Failure
+      - name: 10. Upload Logs (Jika Gagal)
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: build-logs
-          path: crosstool-ng/build.log
+          name: build-failure-logs
+          path: ${{ env.ROOT_DIR }}/crosstool-NG/build.log
+          retention-days: 5
