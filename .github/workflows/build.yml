@@ -1,4 +1,5 @@
-name: Build All ESP32 Toolchains (Fix Sanity Check)
+
+name: Build All ESP32 Toolchains (Final Fix)
 
 on:
   push:
@@ -15,7 +16,6 @@ permissions:
   contents: write
 
 env:
-  # Versi ESP-IDF v5.x (GCC 13.2.0)
   CROSSTOOL_NG_VERSION: "esp-13.2.0_20240530"
 
 jobs:
@@ -36,7 +36,6 @@ jobs:
           if [ -n "$INPUT_TAG" ]; then
             TAG="$INPUT_TAG"
           else
-            # Tag Otomatis: vYYYYMMDD-HHMM
             TAG="v$(date +'%Y%m%d-%H%M')"
           fi
           echo "release_tag=$TAG" >> $GITHUB_OUTPUT
@@ -49,7 +48,7 @@ jobs:
           gh release delete "$TAG" --yes --cleanup-tag || true
           gh release create "$TAG" \
             --title "ESP32 Toolchains (Android Native) - $TAG" \
-            --notes "Build Otomatis GCC 13.2.0. Support: ESP32, S2, S3, C3, C6, H2. Static Musl (No Proot)." \
+            --notes "Build Fix Overlay. Support: ESP32, S2, S3, C3, C6, H2. Static Musl." \
             --draft=false \
             --prerelease=false
 
@@ -63,10 +62,10 @@ jobs:
       fail-fast: false
       matrix:
         target:
-          - xtensa-esp32-elf      # ESP32
-          - xtensa-esp32s2-elf    # S2
-          - xtensa-esp32s3-elf    # S3
-          - riscv32-esp-elf       # C3, C6, H2, P4
+          - xtensa-esp32-elf
+          - xtensa-esp32s2-elf
+          - xtensa-esp32s3-elf
+          - riscv32-esp-elf
 
     steps:
       - name: Checkout Repo
@@ -97,20 +96,15 @@ jobs:
 
           ln -sf /usr/bin/python3 /usr/bin/python
           git config --global --add safe.directory '*'
-          
-          # HAPUS EXPORT CFLAGS DISINI (PENYEBAB ERROR)
-          # Kita akan inject via .config saja agar ct-ng tidak marah.
 
           # 2. Setup & Clone
           mkdir -p $ROOT_DIR/x-tools $ROOT_DIR/artifacts $ROOT_DIR/.build/tarballs
           cd $ROOT_DIR
           
-          # Clone Crosstool-NG
           git clone https://github.com/espressif/crosstool-NG.git -b $CT_VERSION crosstool-NG
           cd crosstool-NG
           git submodule update --init --recursive
           
-          # Install CT-NG Tool
           ./bootstrap
           ./configure --enable-local --prefix=/usr/local
           make -j$(nproc)
@@ -119,7 +113,7 @@ jobs:
           # 3. Configure Target
           ./ct-ng $TARGET_ARCH
           
-          # Clean Default Configs
+          # Clean Configs
           sed -i '/CT_PREFIX_DIR/d' .config
           sed -i '/CT_LOCAL_TARBALLS_DIR/d' .config
           sed -i '/CT_LOG_PROGRESS_BAR/d' .config
@@ -127,8 +121,11 @@ jobs:
           sed -i '/CT_WANTS_STATIC_LINK/d' .config
           sed -i '/CT_CC_CX_LDFLAGS/d' .config
           sed -i '/CT_LDFLAGS_FOR_HOST/d' .config
+          # Hapus config overlay bawaan agar tidak konflik
+          sed -i '/CT_OVERLAY_NAME/d' .config
+          sed -i '/CT_OVERLAY_LOCATION/d' .config
 
-          # Inject STATIC Config (Ini cara yang benar!)
+          # Inject Basic Config
           cat >> .config <<CONFIG_EOF
           CT_PREFIX_DIR="${ROOT_DIR}/x-tools/${TARGET_ARCH}"
           CT_LOCAL_TARBALLS_DIR="${ROOT_DIR}/.build/tarballs"
@@ -137,20 +134,38 @@ jobs:
           CT_EXPERIMENTAL=y
           CT_LOG_PROGRESS_BAR=n
           CT_PARALLEL_JOBS=$(nproc)
-          CT_ARCH_XTENSA_CORE="esp32"
           
-          # STATIC FORCE (Via Config, bukan Env Var)
+          # STATIC FORCE
           CT_STATIC_TOOLCHAIN=y
           CT_WANTS_STATIC_LINK=y
           CT_CC_CX_LDFLAGS="-static"
           CT_LDFLAGS_FOR_HOST="-static"
           CT_STRIP_HOST_TOOLCHAIN_EXECUTABLES=y
           
-          # NO PYTHON (Wajib untuk static)
+          # NO PYTHON
           CT_GDB_CROSS_PYTHON=n
           CT_GDB_CROSS_PYTHON_BINARY=""
           CT_KERNEL="none"
           CONFIG_EOF
+
+          # --- LOGIC KHUSUS OVERLAY (FIXED) ---
+          # Hanya Xtensa yang butuh Overlay "xtensa_esp32"
+          # RISC-V tidak boleh pakai overlay ini.
+          
+          case "$TARGET_ARCH" in
+            xtensa*)
+              echo "=== Applying Xtensa Overlay ==="
+              cat >> .config <<OVERLAY_EOF
+          CT_ARCH_XTENSA_CORE="esp32"
+          # PERBAIKAN: Nama folder asli di git adalah 'xtensa_esp32'
+          CT_OVERLAY_NAME="xtensa_esp32"
+          CT_OVERLAY_LOCATION="${ROOT_DIR}/crosstool-NG/overlays"
+          OVERLAY_EOF
+              ;;
+            *)
+              echo "=== Skipping Overlay for Non-Xtensa ($TARGET_ARCH) ==="
+              ;;
+          esac
 
           yes "" | ./ct-ng oldconfig
           
@@ -159,16 +174,14 @@ jobs:
           export CT_ALLOW_BUILD_AS_ROOT=y
           export CT_ALLOW_BUILD_AS_ROOT_SURE=y
           
-          # Unset flag berbahaya sebelum build (just in case)
+          # Unset flag berbahaya
           unset CFLAGS CXXFLAGS LDFLAGS
           
           ./ct-ng build
           
-          # 5. Packaging (Hard Dereference - Anti 0-Byte)
+          # 5. Packaging (Hard Dereference)
           cd $ROOT_DIR/x-tools
           TAR_NAME="${TARGET_ARCH}-android-native.tar.gz"
-          
-          # PENTING: --hard-dereference memperbaiki file kosong di Android
           tar --hard-dereference -czf $ROOT_DIR/artifacts/$TAR_NAME ${TARGET_ARCH}
           
           # Checksum
