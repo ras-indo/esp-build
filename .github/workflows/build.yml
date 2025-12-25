@@ -1,5 +1,5 @@
 
-name: Build ESP32 Native Android (Docker Fix Final)
+name: Build ESP32 Native Android (Fix 0-Byte Files)
 
 on:
   push:
@@ -14,8 +14,7 @@ env:
   CROSSTOOL_NG_VERSION: 'esp-2021r2'
 
 jobs:
-  build-native-docker:
-    # Tetap gunakan runner ARM agar hasil build native untuk HP
+  build-native-fixed:
     runs-on: ubuntu-22.04-arm
     timeout-minutes: 360
 
@@ -25,63 +24,53 @@ jobs:
 
       - name: 2. Buat Script Build
         run: |
-          # Kita buat script menggunakan /bin/sh (shell bawaan Alpine)
           cat > build_script.sh << 'EOF'
           #!/bin/sh
           set -e
           
-          echo "=== [ALPINE] Posisi saat ini: $(pwd) ==="
-          ls -la build_script.sh
-          
-          echo "=== [ALPINE] Installing Dependencies ==="
+          echo "=== [ALPINE] Setup Dependencies ==="
           apk update
+          # Tambahkan 'tar' (GNU Tar) agar bisa handle hard-link dereference
           apk add --no-cache \
             build-base git bash autoconf automake bison flex texinfo \
             gawk libtool ncurses-dev ncurses-static python3-dev \
             unzip wget bzip2 xz help2man file rsync patch \
             expat-dev expat-static zlib-dev zlib-static \
             linux-headers gettext-dev gettext-static \
-            gnu-libiconv-dev
+            gnu-libiconv-dev tar
 
           ln -sf /usr/bin/python3 /usr/bin/python
           
-          # Set Environment Variable
           export ROOT_DIR=$(pwd)
           export CROSSTOOL_NG_VERSION="${CROSSTOOL_NG_VERSION_ARG}"
-          
-          # Fix git permission
           git config --global --add safe.directory '*'
 
-          echo "=== [ALPINE] Setup Workspace & Clone ct-ng ==="
-          # Hapus sisa build sebelumnya jika ada (karena di-mount dari host)
+          echo "=== [ALPINE] Clean & Clone ==="
           rm -rf crosstool-NG .build x-tools artifacts
           mkdir -p x-tools artifacts .build/tarballs
           
-          echo "Cloning branch: $CROSSTOOL_NG_VERSION"
           git clone https://github.com/espressif/crosstool-NG.git -b $CROSSTOOL_NG_VERSION
-          
           cd crosstool-NG
           git submodule update --init --recursive
           
-          echo "=== [ALPINE] Install crosstool-NG ==="
           ./bootstrap
           ./configure --enable-local --prefix=/usr/local
           make -j$(nproc)
           make install
           cd ..
 
-          echo "=== [ALPINE] Download ISL Library ==="
+          echo "=== [ALPINE] Download ISL ==="
           cd .build/tarballs
           wget --tries=5 --waitretry=5 -O isl-0.19.tar.bz2 https://sources.easybuild.io/i/ISL/isl-0.19.tar.bz2 || \
           wget --tries=5 -O isl-0.19.tar.bz2 https://libisl.sourceforge.io/isl-0.19.tar.bz2
           cd ../..
 
-          echo "=== [ALPINE] Konfigurasi Toolchain (Static Musl) ==="
+          echo "=== [ALPINE] Configure Toolchain ==="
           cd crosstool-NG
           TARGET="xtensa-esp32-elf"
           ./ct-ng $TARGET
 
-          # Hapus config bawaan yang mengganggu
+          # Reset config
           sed -i '/CT_PREFIX_DIR/d' .config
           sed -i '/CT_LOCAL_TARBALLS_DIR/d' .config
           sed -i '/CT_LOG_PROGRESS_BAR/d' .config
@@ -89,7 +78,7 @@ jobs:
           sed -i '/CT_WANTS_STATIC_LINK/d' .config
           sed -i '/CT_CC_CX_LDFLAGS/d' .config
 
-          # Inject Config Khusus Android Native
+          # Inject Config Static
           cat >> .config <<CONFIG_EOF
           CT_PREFIX_DIR="${ROOT_DIR}/x-tools/${TARGET}"
           CT_LOCAL_TARBALLS_DIR="${ROOT_DIR}/.build/tarballs"
@@ -98,63 +87,59 @@ jobs:
           CT_EXPERIMENTAL=y
           CT_LOG_PROGRESS_BAR=n
           CT_PARALLEL_JOBS=$(nproc)
-          
           CT_ARCH="xtensa"
           CT_TARGET_VENDOR="esp32"
           CT_ARCH_XTENSA_CORE="esp32"
           CT_OVERLAY_NAME="esp32"
           CT_OVERLAY_LOCATION="${ROOT_DIR}/crosstool-NG/overlays"
           
-          # KUNCI UTAMA: STATIC LINKING
+          # STATIC & STRIP
           CT_STATIC_TOOLCHAIN=y
           CT_WANTS_STATIC_LINK=y
           CT_CC_CX_LDFLAGS="-static"
           CT_STRIP_HOST_TOOLCHAIN_EXECUTABLES=y
           
-          # DISABLE PYTHON (Agar tidak error dependency)
+          # NO PYTHON
           CT_GDB_CROSS_PYTHON=n
           CT_GDB_CROSS_PYTHON_BINARY=""
-          
           CT_KERNEL="none"
           CONFIG_EOF
 
           yes "" | ./ct-ng oldconfig
 
-          echo "=== [ALPINE] Mulai Build... (Estimasi: 60 menit) ==="
+          echo "=== [ALPINE] Building... ==="
           export CT_ALLOW_BUILD_AS_ROOT=y
           export CT_ALLOW_BUILD_AS_ROOT_SURE=y
-          
           ./ct-ng build
           
-          echo "=== [ALPINE] Verifikasi Hasil ==="
-          RESULT_BIN="${ROOT_DIR}/x-tools/${TARGET}/bin/xtensa-esp32-elf-gcc"
-          
-          if [ -f "$RESULT_BIN" ]; then
-             echo "Binary ditemukan!"
-             file "$RESULT_BIN"
-          else
-             echo "FATAL: Binary gagal dibuat."
+          echo "=== [ALPINE] Validasi Binary ==="
+          BIN_PATH="${ROOT_DIR}/x-tools/${TARGET}/bin/xtensa-esp32-elf-gcc"
+          if [ ! -f "$BIN_PATH" ]; then
+             echo "FATAL: Build gagal."
              exit 1
           fi
           
-          echo "=== [ALPINE] Packaging ==="
+          # Cek tipe file (harus static)
+          file "$BIN_PATH"
+
+          echo "=== [ALPINE] Packaging (FIX HARD LINKS) ==="
           cd ${ROOT_DIR}/x-tools
-          TAR_NAME="${TARGET}-gcc8_4_0-android-native.tar.gz"
-          tar -czf ${ROOT_DIR}/artifacts/$TAR_NAME ${TARGET}
-          echo "Packaging Selesai: artifacts/$TAR_NAME"
           
+          TAR_NAME="${TARGET}-gcc8_4_0-android-native-fixed.tar.gz"
+          
+          # PENTING: Gunakan --hard-dereference
+          # Ini mengubah Hard Link menjadi file fisik (Copy).
+          # Mencegah file 0-byte saat diekstrak di Android.
+          tar --hard-dereference -czf ${ROOT_DIR}/artifacts/$TAR_NAME ${TARGET}
+          
+          echo "Packaging Selesai."
           EOF
           
           chmod +x build_script.sh
 
-      - name: 3. Jalankan Build di Container Alpine
+      - name: 3. Jalankan Docker
         run: |
-          echo "Menjalankan Docker..."
-          
-          # PERBAIKAN UTAMA DI SINI:
-          # Kita mount workspace GitHub ke folder /workspace di dalam container
-          # Lalu kita jalankan script dari path /workspace tersebut
-          
+          echo "Menjalankan Build..."
           docker run --rm --privileged \
             -v "${{ github.workspace }}:/workspace" \
             -w "/workspace" \
@@ -165,14 +150,13 @@ jobs:
       - name: 4. Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: toolchain-android-native
+          name: toolchain-android-native-fixed
           path: artifacts/*.tar.gz
           retention-days: 30
-
-      - name: 5. Upload Logs (Jika Error)
+          
+      - name: 5. Upload Logs
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: failure-logs
           path: crosstool-NG/build.log
-          retention-days: 5
