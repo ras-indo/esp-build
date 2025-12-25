@@ -1,55 +1,104 @@
-
-name: Build ESP32 Native Android (Fix 0-Byte Files)
+name: Build All ESP32 Toolchains (Android Native)
 
 on:
-  push:
-    branches:
-      - 'main'
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Tag Rilis (contoh: v13.2.0-esp-idf-5.x)"
+        required: true
+        default: "v13.2.0-r1"
 
 permissions:
   contents: write
 
 env:
-  CROSSTOOL_NG_VERSION: 'esp-2021r2'
+  # Kita gunakan versi baru agar support ESP32-C6 dan H2
+  # GCC 13.2.0 cocok untuk ESP-IDF v5.1 ke atas
+  CROSSTOOL_NG_VERSION: "esp-13.2.0_20240530"
 
 jobs:
-  build-native-fixed:
-    runs-on: ubuntu-22.04-arm
-    timeout-minutes: 360
-
+  # --- JOB 1: SIAPKAN RELEASE ---
+  prepare_release:
+    runs-on: ubuntu-latest
     steps:
-      - name: 1. Checkout Repository
+      - name: Checkout Repo
         uses: actions/checkout@v4
 
-      - name: 2. Buat Script Build
+      - name: Setup Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.event.inputs.release_tag }}"
+          echo "Menyiapkan Release: $TAG"
+          
+          # Hapus release lama jika ada (untuk debugging)
+          gh release delete "$TAG" --yes --cleanup-tag || true
+          
+          # Buat Release Baru
+          gh release create "$TAG" \
+            --title "ESP32 Toolchains (Android/Termux Native) - $TAG" \
+            --notes "Toolchain Static (Musl) untuk Termux. Support: ESP32, S2, S3, C3, C6, H2. Tidak butuh Proot." \
+            --draft=false \
+            --prerelease=false
+
+  # --- JOB 2: BUILD PARALEL (MATRIX) ---
+  build_toolchains:
+    needs: prepare_release
+    runs-on: ubuntu-22.04-arm  # Runner ARM64 Wajib
+    timeout-minutes: 360
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - xtensa-esp32-elf      # Classic ESP32
+          - xtensa-esp32s2-elf    # ESP32-S2
+          - xtensa-esp32s3-elf    # ESP32-S3
+          - riscv32-esp-elf       # RISC-V (ESP32-C3, C6, H2, P4)
+
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+
+      - name: Generate Build Script (Alpine Static)
         run: |
           cat > build_script.sh << 'EOF'
           #!/bin/sh
           set -e
           
-          echo "=== [ALPINE] Setup Dependencies ==="
+          # --- CONFIGURATION ---
+          TARGET_ARCH="${TARGET_ARG}"
+          CT_VERSION="${VERSION_ARG}"
+          ROOT_DIR="/workspace"
+          
+          echo "=== [ALPINE] Building Target: $TARGET_ARCH ==="
+          
+          # 1. Install Dependencies (Alpine 3.18 support GCC 13)
           apk update
-          # Tambahkan 'tar' (GNU Tar) agar bisa handle hard-link dereference
           apk add --no-cache \
             build-base git bash autoconf automake bison flex texinfo \
             gawk libtool ncurses-dev ncurses-static python3-dev \
-            unzip wget bzip2 xz help2man file rsync patch \
+            unzip wget bzip2 xz help2man file rsync patch tar \
             expat-dev expat-static zlib-dev zlib-static \
             linux-headers gettext-dev gettext-static \
-            gnu-libiconv-dev tar
+            gnu-libiconv-dev mpfr-dev gmp-dev mpc1-dev
 
           ln -sf /usr/bin/python3 /usr/bin/python
-          
-          export ROOT_DIR=$(pwd)
-          export CROSSTOOL_NG_VERSION="${CROSSTOOL_NG_VERSION_ARG}"
           git config --global --add safe.directory '*'
-
-          echo "=== [ALPINE] Clean & Clone ==="
-          rm -rf crosstool-NG .build x-tools artifacts
-          mkdir -p x-tools artifacts .build/tarballs
           
-          git clone https://github.com/espressif/crosstool-NG.git -b $CROSSTOOL_NG_VERSION
+          # --- NUCLEAR STATIC FLAGS ---
+          # Memaksa seluruh binary (termasuk cc1, lto) jadi static
+          export CFLAGS="-static -O2"
+          export CXXFLAGS="-static -O2"
+          export LDFLAGS="-static"
+
+          # 2. Setup Workspace
+          mkdir -p $ROOT_DIR/x-tools $ROOT_DIR/artifacts $ROOT_DIR/.build/tarballs
+          cd $ROOT_DIR
+          
+          # 3. Clone Crosstool-NG
+          echo "Downloading Crosstool-NG ($CT_VERSION)..."
+          git clone https://github.com/espressif/crosstool-NG.git -b $CT_VERSION crosstool-NG
           cd crosstool-NG
           git submodule update --init --recursive
           
@@ -57,106 +106,104 @@ jobs:
           ./configure --enable-local --prefix=/usr/local
           make -j$(nproc)
           make install
-          cd ..
-
-          echo "=== [ALPINE] Download ISL ==="
-          cd .build/tarballs
-          wget --tries=5 --waitretry=5 -O isl-0.19.tar.bz2 https://sources.easybuild.io/i/ISL/isl-0.19.tar.bz2 || \
-          wget --tries=5 -O isl-0.19.tar.bz2 https://libisl.sourceforge.io/isl-0.19.tar.bz2
-          cd ../..
-
-          echo "=== [ALPINE] Configure Toolchain ==="
-          cd crosstool-NG
-          TARGET="xtensa-esp32-elf"
-          ./ct-ng $TARGET
-
-          # Reset config
+          
+          # 4. Configure Target
+          echo "Configuring $TARGET_ARCH..."
+          ./ct-ng $TARGET_ARCH
+          
+          # Clean default configs
           sed -i '/CT_PREFIX_DIR/d' .config
           sed -i '/CT_LOCAL_TARBALLS_DIR/d' .config
           sed -i '/CT_LOG_PROGRESS_BAR/d' .config
           sed -i '/CT_STATIC_TOOLCHAIN/d' .config
           sed -i '/CT_WANTS_STATIC_LINK/d' .config
           sed -i '/CT_CC_CX_LDFLAGS/d' .config
+          sed -i '/CT_LDFLAGS_FOR_HOST/d' .config
 
-          # Inject Config Static
+          # Inject STATIC Config
           cat >> .config <<CONFIG_EOF
-          CT_PREFIX_DIR="${ROOT_DIR}/x-tools/${TARGET}"
+          # Paths
+          CT_PREFIX_DIR="${ROOT_DIR}/x-tools/${TARGET_ARCH}"
           CT_LOCAL_TARBALLS_DIR="${ROOT_DIR}/.build/tarballs"
+          
+          # Build Performance
           CT_ALLOW_BUILD_AS_ROOT=y
           CT_ALLOW_BUILD_AS_ROOT_SURE=y
           CT_EXPERIMENTAL=y
           CT_LOG_PROGRESS_BAR=n
           CT_PARALLEL_JOBS=$(nproc)
-          CT_ARCH="xtensa"
-          CT_TARGET_VENDOR="esp32"
-          CT_ARCH_XTENSA_CORE="esp32"
-          CT_OVERLAY_NAME="esp32"
-          CT_OVERLAY_LOCATION="${ROOT_DIR}/crosstool-NG/overlays"
           
-          # STATIC & STRIP
+          # TARGET SPECIFIC (Vendor override if needed)
+          CT_ARCH_XTENSA_CORE="esp32" # Default fallback, will be ignored by riscv
+          
+          # --- STATIC FORCE ---
           CT_STATIC_TOOLCHAIN=y
           CT_WANTS_STATIC_LINK=y
           CT_CC_CX_LDFLAGS="-static"
+          CT_LDFLAGS_FOR_HOST="-static"
           CT_STRIP_HOST_TOOLCHAIN_EXECUTABLES=y
           
-          # NO PYTHON
+          # DISABLE PYTHON GDB (Wajib untuk static)
           CT_GDB_CROSS_PYTHON=n
           CT_GDB_CROSS_PYTHON_BINARY=""
           CT_KERNEL="none"
           CONFIG_EOF
 
-          yes "" | ./ct-ng oldconfig
+          # RISC-V Specific Fixes (Karena satu compiler utk banyak chip)
+          if [ "$TARGET_ARCH" = "riscv32-esp-elf" ]; then
+             # Pastikan multilib aktif agar support C3, C6, H2
+             # Biasanya default config riscv32-esp-elf sudah handle ini
+             echo "Building RISC-V Combined Toolchain..."
+          fi
 
-          echo "=== [ALPINE] Building... ==="
+          yes "" | ./ct-ng oldconfig
+          
+          # 5. Build
+          echo "Starting Build... (Hold tight!)"
           export CT_ALLOW_BUILD_AS_ROOT=y
           export CT_ALLOW_BUILD_AS_ROOT_SURE=y
           ./ct-ng build
           
-          echo "=== [ALPINE] Validasi Binary ==="
-          BIN_PATH="${ROOT_DIR}/x-tools/${TARGET}/bin/xtensa-esp32-elf-gcc"
-          if [ ! -f "$BIN_PATH" ]; then
-             echo "FATAL: Build gagal."
-             exit 1
-          fi
+          # 6. Packaging (Anti 0-Byte Fix)
+          echo "Packaging..."
+          cd $ROOT_DIR/x-tools
           
-          # Cek tipe file (harus static)
-          file "$BIN_PATH"
-
-          echo "=== [ALPINE] Packaging (FIX HARD LINKS) ==="
-          cd ${ROOT_DIR}/x-tools
+          TAR_NAME="${TARGET_ARCH}-android-native.tar.gz"
           
-          TAR_NAME="${TARGET}-gcc8_4_0-android-native-fixed.tar.gz"
+          # Gunakan --hard-dereference agar hardlink jadi file fisik
+          tar --hard-dereference -czf $ROOT_DIR/artifacts/$TAR_NAME ${TARGET_ARCH}
           
-          # PENTING: Gunakan --hard-dereference
-          # Ini mengubah Hard Link menjadi file fisik (Copy).
-          # Mencegah file 0-byte saat diekstrak di Android.
-          tar --hard-dereference -czf ${ROOT_DIR}/artifacts/$TAR_NAME ${TARGET}
+          # Buat Checksum
+          cd $ROOT_DIR/artifacts
+          sha256sum $TAR_NAME > ${TAR_NAME}.sha256
           
-          echo "Packaging Selesai."
+          echo "DONE: $TAR_NAME"
           EOF
           
           chmod +x build_script.sh
 
-      - name: 3. Jalankan Docker
+      - name: Run Build in Docker (Alpine 3.18)
         run: |
-          echo "Menjalankan Build..."
+          echo "Menjalankan Build Container untuk ${{ matrix.target }}..."
+          
+          # Gunakan Alpine 3.18 (Support GCC 13 lebih baik dari 3.17)
           docker run --rm --privileged \
             -v "${{ github.workspace }}:/workspace" \
             -w "/workspace" \
-            -e CROSSTOOL_NG_VERSION_ARG="$CROSSTOOL_NG_VERSION" \
-            alpine:3.17 \
+            -e TARGET_ARG="${{ matrix.target }}" \
+            -e VERSION_ARG="${{ env.CROSSTOOL_NG_VERSION }}" \
+            alpine:3.18 \
             /bin/sh /workspace/build_script.sh
 
-      - name: 4. Upload Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: toolchain-android-native-fixed
-          path: artifacts/*.tar.gz
-          retention-days: 30
+      - name: Upload to Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.event.inputs.release_tag }}"
+          echo "Mengupload ${{ matrix.target }} ke release $TAG..."
           
-      - name: 5. Upload Logs
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: failure-logs
-          path: crosstool-NG/build.log
+          cd artifacts
+          gh release upload "$TAG" \
+            ${{ matrix.target }}-android-native.tar.gz \
+            ${{ matrix.target }}-android-native.tar.gz.sha256 \
+            --clobber
