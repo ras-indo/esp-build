@@ -1,12 +1,9 @@
-name: Build All ESP32 Toolchains (Auto & Manual)
+name: Build All ESP32 Toolchains (Fix Sanity Check)
 
 on:
-  # 1. Jalan Otomatis setiap ada Push ke branch main
   push:
     branches:
       - 'main'
-  
-  # 2. Jalan Manual lewat tombol Actions (bisa tentukan nama tag)
   workflow_dispatch:
     inputs:
       release_tag:
@@ -18,6 +15,7 @@ permissions:
   contents: write
 
 env:
+  # Versi ESP-IDF v5.x (GCC 13.2.0)
   CROSSTOOL_NG_VERSION: "esp-13.2.0_20240530"
 
 jobs:
@@ -35,17 +33,12 @@ jobs:
         env:
           INPUT_TAG: ${{ github.event.inputs.release_tag }}
         run: |
-          # Logika Cerdas penentuan Tag
           if [ -n "$INPUT_TAG" ]; then
-            # Jika user input manual, pakai itu
             TAG="$INPUT_TAG"
           else
-            # Jika jalan otomatis (Push), buat tag pakai Tanggal-Jam
-            # Format: vYYYYMMDD-HHMM (Contoh: v20231225-0930)
+            # Tag Otomatis: vYYYYMMDD-HHMM
             TAG="v$(date +'%Y%m%d-%H%M')"
           fi
-          
-          echo "Tag Rilis Terpilih: $TAG"
           echo "release_tag=$TAG" >> $GITHUB_OUTPUT
 
       - name: Buat Release di GitHub
@@ -53,13 +46,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.set_tag.outputs.release_tag }}
         run: |
-          # Cek jika release sudah ada (hapus dulu biar update)
           gh release delete "$TAG" --yes --cleanup-tag || true
-          
-          # Buat Release Baru
           gh release create "$TAG" \
             --title "ESP32 Toolchains (Android Native) - $TAG" \
-            --notes "Build Otomatis Crosstool-NG ${{ env.CROSSTOOL_NG_VERSION }}. Support: ESP32, S2, S3, C3, C6, H2. Tanpa Proot." \
+            --notes "Build Otomatis GCC 13.2.0. Support: ESP32, S2, S3, C3, C6, H2. Static Musl (No Proot)." \
             --draft=false \
             --prerelease=false
 
@@ -73,16 +63,16 @@ jobs:
       fail-fast: false
       matrix:
         target:
-          - xtensa-esp32-elf      # ESP32 Original
-          - xtensa-esp32s2-elf    # ESP32-S2
-          - xtensa-esp32s3-elf    # ESP32-S3
-          - riscv32-esp-elf       # ESP32-C3, C6, H2, P4 (RISC-V All in One)
+          - xtensa-esp32-elf      # ESP32
+          - xtensa-esp32s2-elf    # S2
+          - xtensa-esp32s3-elf    # S3
+          - riscv32-esp-elf       # C3, C6, H2, P4
 
     steps:
       - name: Checkout Repo
         uses: actions/checkout@v4
 
-      - name: Generate Build Script (Nuclear Static)
+      - name: Generate Build Script
         run: |
           cat > build_script.sh << 'EOF'
           #!/bin/sh
@@ -108,28 +98,28 @@ jobs:
           ln -sf /usr/bin/python3 /usr/bin/python
           git config --global --add safe.directory '*'
           
-          # NUCLEAR FLAGS (Force Static)
-          export CFLAGS="-static -O2"
-          export CXXFLAGS="-static -O2"
-          export LDFLAGS="-static"
+          # HAPUS EXPORT CFLAGS DISINI (PENYEBAB ERROR)
+          # Kita akan inject via .config saja agar ct-ng tidak marah.
 
           # 2. Setup & Clone
           mkdir -p $ROOT_DIR/x-tools $ROOT_DIR/artifacts $ROOT_DIR/.build/tarballs
           cd $ROOT_DIR
           
+          # Clone Crosstool-NG
           git clone https://github.com/espressif/crosstool-NG.git -b $CT_VERSION crosstool-NG
           cd crosstool-NG
           git submodule update --init --recursive
           
+          # Install CT-NG Tool
           ./bootstrap
           ./configure --enable-local --prefix=/usr/local
           make -j$(nproc)
           make install
           
-          # 3. Configure
+          # 3. Configure Target
           ./ct-ng $TARGET_ARCH
           
-          # Clean Configs
+          # Clean Default Configs
           sed -i '/CT_PREFIX_DIR/d' .config
           sed -i '/CT_LOCAL_TARBALLS_DIR/d' .config
           sed -i '/CT_LOG_PROGRESS_BAR/d' .config
@@ -138,7 +128,7 @@ jobs:
           sed -i '/CT_CC_CX_LDFLAGS/d' .config
           sed -i '/CT_LDFLAGS_FOR_HOST/d' .config
 
-          # Inject Config
+          # Inject STATIC Config (Ini cara yang benar!)
           cat >> .config <<CONFIG_EOF
           CT_PREFIX_DIR="${ROOT_DIR}/x-tools/${TARGET_ARCH}"
           CT_LOCAL_TARBALLS_DIR="${ROOT_DIR}/.build/tarballs"
@@ -149,14 +139,14 @@ jobs:
           CT_PARALLEL_JOBS=$(nproc)
           CT_ARCH_XTENSA_CORE="esp32"
           
-          # STATIC FORCE
+          # STATIC FORCE (Via Config, bukan Env Var)
           CT_STATIC_TOOLCHAIN=y
           CT_WANTS_STATIC_LINK=y
           CT_CC_CX_LDFLAGS="-static"
           CT_LDFLAGS_FOR_HOST="-static"
           CT_STRIP_HOST_TOOLCHAIN_EXECUTABLES=y
           
-          # NO PYTHON
+          # NO PYTHON (Wajib untuk static)
           CT_GDB_CROSS_PYTHON=n
           CT_GDB_CROSS_PYTHON_BINARY=""
           CT_KERNEL="none"
@@ -168,11 +158,17 @@ jobs:
           echo "Starting Build..."
           export CT_ALLOW_BUILD_AS_ROOT=y
           export CT_ALLOW_BUILD_AS_ROOT_SURE=y
+          
+          # Unset flag berbahaya sebelum build (just in case)
+          unset CFLAGS CXXFLAGS LDFLAGS
+          
           ./ct-ng build
           
-          # 5. Packaging (Hard Dereference)
+          # 5. Packaging (Hard Dereference - Anti 0-Byte)
           cd $ROOT_DIR/x-tools
           TAR_NAME="${TARGET_ARCH}-android-native.tar.gz"
+          
+          # PENTING: --hard-dereference memperbaiki file kosong di Android
           tar --hard-dereference -czf $ROOT_DIR/artifacts/$TAR_NAME ${TARGET_ARCH}
           
           # Checksum
