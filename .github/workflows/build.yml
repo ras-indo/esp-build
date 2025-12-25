@@ -1,4 +1,4 @@
-name: Build All ESP32 Toolchains (Overlay Fixed)
+name: Build All ESP32 Toolchains (Sample Trust)
 
 on:
   push:
@@ -47,7 +47,7 @@ jobs:
           gh release delete "$TAG" --yes --cleanup-tag || true
           gh release create "$TAG" \
             --title "ESP32 Toolchains (Android Native) - $TAG" \
-            --notes "Build Fix Overlay & Core. Support: ESP32, S2, S3, C3, C6, H2. Static Musl." \
+            --notes "Build Valid (Trust Sample). Support: ESP32, S2, S3, C3, C6, H2. Static Musl." \
             --draft=false \
             --prerelease=false
 
@@ -61,10 +61,10 @@ jobs:
       fail-fast: false
       matrix:
         target:
-          - xtensa-esp32-elf      # ESP32
-          - xtensa-esp32s2-elf    # S2
-          - xtensa-esp32s3-elf    # S3
-          - riscv32-esp-elf       # C3, C6, H2
+          - xtensa-esp32-elf
+          - xtensa-esp32s2-elf
+          - xtensa-esp32s3-elf
+          - riscv32-esp-elf
 
     steps:
       - name: Checkout Repo
@@ -109,61 +109,48 @@ jobs:
           make -j$(nproc)
           make install
           
-          # 3. Configure Target (Load Default Sample)
+          # 3. Configure Target (Load Sample)
+          # Ini akan memuat setting BENAR untuk Overlay & Core
           ./ct-ng $TARGET_ARCH
           
-          # Clean Configs
+          # Clean Configs (HANYA PATH & OPSI BUILD)
+          # JANGAN HAPUS CT_OVERLAY_NAME atau CT_ARCH_XTENSA_CORE!
           sed -i '/CT_PREFIX_DIR/d' .config
           sed -i '/CT_LOCAL_TARBALLS_DIR/d' .config
+          sed -i '/CT_OVERLAY_LOCATION/d' .config
           sed -i '/CT_LOG_PROGRESS_BAR/d' .config
           sed -i '/CT_STATIC_TOOLCHAIN/d' .config
           sed -i '/CT_WANTS_STATIC_LINK/d' .config
           sed -i '/CT_CC_CX_LDFLAGS/d' .config
           sed -i '/CT_LDFLAGS_FOR_HOST/d' .config
-          # Hapus config overlay bawaan agar tidak konflik
-          sed -i '/CT_OVERLAY_NAME/d' .config
-          sed -i '/CT_OVERLAY_LOCATION/d' .config
-          # Hapus config Core bawaan dari variable override (biarkan ct-ng mengatur default)
-          sed -i '/CT_ARCH_XTENSA_CORE/d' .config
 
-          # Inject Basic Config
+          # Inject Config (Override Path & Force Static)
           cat >> .config <<CONFIG_EOF
+          # Paths Override
           CT_PREFIX_DIR="${ROOT_DIR}/x-tools/${TARGET_ARCH}"
           CT_LOCAL_TARBALLS_DIR="${ROOT_DIR}/.build/tarballs"
-          CT_ALLOW_BUILD_AS_ROOT=y
-          CT_ALLOW_BUILD_AS_ROOT_SURE=y
-          CT_EXPERIMENTAL=y
-          CT_LOG_PROGRESS_BAR=n
-          CT_PARALLEL_JOBS=$(nproc)
+          # Paksa lokasi overlay ke folder checkout saat ini
+          CT_OVERLAY_LOCATION="${ROOT_DIR}/crosstool-NG/overlays" 
           
-          # STATIC FORCE
+          # Static Build Settings
           CT_STATIC_TOOLCHAIN=y
           CT_WANTS_STATIC_LINK=y
           CT_CC_CX_LDFLAGS="-static"
           CT_LDFLAGS_FOR_HOST="-static"
           CT_STRIP_HOST_TOOLCHAIN_EXECUTABLES=y
           
-          # NO PYTHON
+          # General Settings
+          CT_ALLOW_BUILD_AS_ROOT=y
+          CT_ALLOW_BUILD_AS_ROOT_SURE=y
+          CT_EXPERIMENTAL=y
+          CT_LOG_PROGRESS_BAR=n
+          CT_PARALLEL_JOBS=$(nproc)
+          
+          # Disable Python
           CT_GDB_CROSS_PYTHON=n
           CT_GDB_CROSS_PYTHON_BINARY=""
           CT_KERNEL="none"
           CONFIG_EOF
-
-          # --- LOGIC KHUSUS OVERLAY (FIXED NAME) ---
-          case "$TARGET_ARCH" in
-            xtensa*)
-              echo "=== Applying Xtensa Overlay ==="
-              cat >> .config <<OVERLAY_EOF
-          # Fix: Gunakan 'esp32' saja, ct-ng akan menambah prefix 'xtensa_' otomatis
-          # Hasilnya: xtensa_esp32 (sesuai nama folder asli)
-          CT_OVERLAY_NAME="esp32"
-          CT_OVERLAY_LOCATION="${ROOT_DIR}/crosstool-NG/overlays"
-          OVERLAY_EOF
-              ;;
-            *)
-              echo "=== Skipping Overlay for Non-Xtensa ($TARGET_ARCH) ==="
-              ;;
-          esac
 
           yes "" | ./ct-ng oldconfig
           
@@ -176,9 +163,10 @@ jobs:
           
           ./ct-ng build
           
-          # 5. Packaging (Hard Dereference)
+          # 5. Packaging
           cd $ROOT_DIR/x-tools
           TAR_NAME="${TARGET_ARCH}-android-native.tar.gz"
+          # Hard Dereference: Fix 0-byte files on Android
           tar --hard-dereference -czf $ROOT_DIR/artifacts/$TAR_NAME ${TARGET_ARCH}
           
           # Checksum
