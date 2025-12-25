@@ -1,5 +1,5 @@
 
-name: Build ESP-IDF Toolchain (Alpine/Musl Static) - ANDROID NATIVE
+name: Build ESP-IDF Toolchain (Alpine/Musl Static) - ANDROID NATIVE FIX
 
 on:
   push:
@@ -12,14 +12,14 @@ permissions:
 
 env:
   CROSSTOOL_NG_VERSION: 'esp-2021r2'
-  # Kita tidak butuh set CT_HOST_TRIPLET manual, karena build di Alpine otomatis jadi Musl
-  
+  # Variabel ini PENTING agar ct-ng mau jalan sebagai root
+  CT_ALLOW_BUILD_AS_ROOT: 'y'
+  CT_ALLOW_BUILD_AS_ROOT_SURE: 'y'
+
 jobs:
   compile-alpine:
-    # Kita tetap pakai runner ARM, tapi jalan di dalam container Alpine
     runs-on: ubuntu-22.04-arm
     
-    # MAGIC: Jalankan semua proses di dalam Alpine Linux
     container:
       image: alpine:3.15
       options: --privileged
@@ -36,24 +36,15 @@ jobs:
       - name: Install Dependencies (Alpine)
         run: |
           echo "Installing Alpine Dependencies..."
-          # Install paket dasar untuk build crosstool-ng
           apk update
           apk add --no-cache \
             build-base git bash bison flex texinfo gawk help2man \
             libtool ncurses-dev python3 python3-dev unzip wget \
             xz automake autoconf shadow file patch \
-            linux-headers gettext-dev
+            linux-headers gettext-dev tar gzip bzip2
 
           # Link python3 ke python
           ln -sf /usr/bin/python3 /usr/bin/python
-
-      - name: Setup User (Non-Root)
-        run: |
-          # Crosstool-NG sebaiknya tidak dibuild sebagai root, kita buat user 'builder'
-          useradd -m -s /bin/bash builder
-          mkdir -p /github/workspace
-          chown -R builder:builder /github/workspace
-          chown -R builder:builder /__w || true
 
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -62,14 +53,16 @@ jobs:
 
       - name: Prepare Workspace
         run: |
-          mv repo/* .
+          # Kita pindahkan ke folder kerja yang aman
+          mkdir -p /workdir
+          cp -r repo/* /workdir/
+          cd /workdir
+          
           rm -rf crosstool-ng .build x-tools artifacts
           mkdir -p x-tools artifacts
-          chown -R builder:builder .
 
       - name: Download & Install crosstool-NG
-        # Kita jalankan sebagai user builder
-        shell: su builder {0}
+        working-directory: /workdir
         run: |
           echo "Mengunduh crosstool-NG branch: $CROSSTOOL_NG_VERSION"
           git clone https://github.com/espressif/crosstool-NG.git -b $CROSSTOOL_NG_VERSION
@@ -79,8 +72,8 @@ jobs:
           echo "=== INIT SUBMODULES ==="
           git submodule update --init --recursive
           
-          # Fix untuk Alpine: Kadang butuh touch file agar timestamp benar
-          find . -name configure.ac -exec touch {} +
+          # Fix timestamp agar autoconf tidak bingung
+          find . -exec touch {} +
           
           ./bootstrap
           ./configure --enable-local --prefix=$PWD/install
@@ -88,10 +81,11 @@ jobs:
           make install
 
       - name: Siapkan Config & Patch
-        shell: su builder {0}
+        working-directory: /workdir
         env:
           TARGET: ${{ matrix.target }}
         run: |
+          # Masukkan ct-ng ke PATH
           export PATH=$PWD/crosstool-ng/install/bin:$PATH
           mkdir -p .build/tarballs
           
@@ -108,39 +102,37 @@ jobs:
           sed -i '/CT_PREFIX_DIR/d' .config
           sed -i '/CT_LOCAL_TARBALLS_DIR/d' .config
           sed -i '/CT_LogFile/d' .config
+          sed -i '/CT_ALLOW_BUILD_AS_ROOT/d' .config
           
-          # 3. Inject Config BARU (MUSL STATIC)
-          # Perhatikan: Kita matikan Werror karena compiler Alpine lebih strict
+          # 3. Inject Config BARU (MUSL STATIC + ROOT FORCE)
           cat >> .config <<EOF
           
-          # Paths
-          CT_PREFIX_DIR="$GITHUB_WORKSPACE/x-tools/${TARGET}"
-          CT_LOCAL_TARBALLS_DIR="$GITHUB_WORKSPACE/.build/tarballs"
+          # Paths (Gunakan path absolut dalam container)
+          CT_PREFIX_DIR="/workdir/x-tools/${TARGET}"
+          CT_LOCAL_TARBALLS_DIR="/workdir/.build/tarballs"
           
           # Build Options
           CT_PARALLEL_JOBS=$(nproc)
           CT_LOG_PROGRESS_BAR=n
           CT_Experimental=y
+          
+          # FORCE ROOT (Wajib di container ini)
           CT_ALLOW_BUILD_AS_ROOT=y
           CT_ALLOW_BUILD_AS_ROOT_SURE=y
           
-          # --- KUNCI KEBERHASILAN DI TERMUX ---
-          # 1. Static Linking
+          # --- KUNCI KEBERHASILAN DI TERMUX (MUSL) ---
           CT_STATIC_TOOLCHAIN=y
           CT_WANTS_STATIC_LINK=y
-          # 2. Strip binary
           CT_STRIP_HOST_TOOLCHAIN_EXECUTABLES=y
-          # 3. Matikan Python GDB (Penyebab error di static build)
           CT_GDB_CROSS_PYTHON=n
           CT_GDB_CROSS_PYTHON_BINARY=""
-          # 4. Matikan Warning as Error (Penting di Alpine)
           CT_WERROR=n
-          # ------------------------------------
+          # -------------------------------------------
           
           # ESP32 Specifics
           CT_TARGET_VENDOR="esp32"
           CT_OVERLAY_NAME="esp32"
-          CT_OVERLAY_LOCATION="$GITHUB_WORKSPACE/crosstool-ng/overlays"
+          CT_OVERLAY_LOCATION="/workdir/crosstool-ng/overlays"
           EOF
           
           # Fix Kernel Version check
@@ -150,43 +142,48 @@ jobs:
           yes "" | ct-ng oldconfig
 
       - name: Build Toolchain
-        shell: su builder {0}
         id: build
+        working-directory: /workdir
         run: |
           export PATH=$PWD/crosstool-ng/install/bin:$PATH
           cd crosstool-ng
           
-          # Fix ISL download manual (Alpine kadang fail SSL lama)
+          # Fix ISL download manual
           cd ../.build/tarballs
           wget --no-check-certificate -O isl-0.19.tar.bz2 https://sources.easybuild.io/i/ISL/isl-0.19.tar.bz2 || true
           cd ../../crosstool-ng
           
-          echo "Memulai Build di Alpine (Musl)..."
+          echo "Memulai Build di Alpine (Musl) sebagai ROOT..."
+          # Kita set lagi env var untuk memastikan
+          export CT_ALLOW_BUILD_AS_ROOT=y
+          export CT_ALLOW_BUILD_AS_ROOT_SURE=y
+          
           ct-ng build
           
           echo "success=true" >> $GITHUB_OUTPUT
 
       - name: Packaging
         if: steps.build.outputs.success == 'true'
+        working-directory: /workdir
         run: |
           echo "Checking binary type..."
-          # Verifikasi bahwa ini benar-benar static
           file x-tools/${{ matrix.target }}/bin/*-gcc | head -n 1
           
           ARTIFACT_NAME="${{ matrix.target }}-gcc8_4_0-musl-static-native-android.tar.gz"
           
           cd x-tools
-          # Tar tanpa owner info agar tidak masalah permission saat extract
-          tar --owner=0 --group=0 -czf ../artifacts/$ARTIFACT_NAME *
+          tar -czf ../artifacts/$ARTIFACT_NAME *
           
-          echo "ARTIFACT_PATH=$GITHUB_WORKSPACE/artifacts/$ARTIFACT_NAME" >> $GITHUB_ENV
+          # Pindahkan artifact kembali ke workspace GitHub agar bisa di-upload
+          cp ../artifacts/$ARTIFACT_NAME $GITHUB_WORKSPACE/
+          echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> $GITHUB_ENV
 
       - name: Upload Artifact
         if: steps.build.outputs.success == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.target }}-android-native
-          path: ${{ env.ARTIFACT_PATH }}
+          name: ${{ matrix.target }}-android-native-fixed
+          path: ${{ github.workspace }}/${{ env.ARTIFACT_NAME }}
           retention-days: 30
 
       - name: Upload Logs (If Fail)
@@ -194,4 +191,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: build-log
-          path: crosstool-ng/build.log
+          path: /workdir/crosstool-ng/build.log
