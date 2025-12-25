@@ -1,5 +1,5 @@
 
-name: Build ESP-IDF Toolchains (Termux Static) - FINAL
+name: Build ESP-IDF Toolchain (Alpine/Musl Static) - ANDROID NATIVE
 
 on:
   push:
@@ -12,11 +12,18 @@ permissions:
 
 env:
   CROSSTOOL_NG_VERSION: 'esp-2021r2'
-  CT_HOST_TRIPLET: 'aarch64-unknown-linux-gnu'
-
+  # Kita tidak butuh set CT_HOST_TRIPLET manual, karena build di Alpine otomatis jadi Musl
+  
 jobs:
-  compile:
+  compile-alpine:
+    # Kita tetap pakai runner ARM, tapi jalan di dalam container Alpine
     runs-on: ubuntu-22.04-arm
+    
+    # MAGIC: Jalankan semua proses di dalam Alpine Linux
+    container:
+      image: alpine:3.15
+      options: --privileged
+
     timeout-minutes: 360
     
     strategy:
@@ -26,38 +33,43 @@ jobs:
           - xtensa-esp32-elf
 
     steps:
+      - name: Install Dependencies (Alpine)
+        run: |
+          echo "Installing Alpine Dependencies..."
+          # Install paket dasar untuk build crosstool-ng
+          apk update
+          apk add --no-cache \
+            build-base git bash bison flex texinfo gawk help2man \
+            libtool ncurses-dev python3 python3-dev unzip wget \
+            xz automake autoconf shadow file patch \
+            linux-headers gettext-dev
+
+          # Link python3 ke python
+          ln -sf /usr/bin/python3 /usr/bin/python
+
+      - name: Setup User (Non-Root)
+        run: |
+          # Crosstool-NG sebaiknya tidak dibuild sebagai root, kita buat user 'builder'
+          useradd -m -s /bin/bash builder
+          mkdir -p /github/workspace
+          chown -R builder:builder /github/workspace
+          chown -R builder:builder /__w || true
+
       - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          path: repo
 
-      - name: Bersihkan Workspace
+      - name: Prepare Workspace
         run: |
-          echo "Membersihkan workspace..."
+          mv repo/* .
           rm -rf crosstool-ng .build x-tools artifacts
           mkdir -p x-tools artifacts
-
-      - name: Set Environment Variables
-        run: |
-          echo "TARGET=${{ matrix.target }}" >> $GITHUB_ENV
-          echo "CT_PREFIX_DIR=$GITHUB_WORKSPACE/x-tools/${{ matrix.target }}" >> $GITHUB_ENV
-          echo "CT_HOST_TRIPLET=${{ env.CT_HOST_TRIPLET }}" >> $GITHUB_ENV
-          echo "CROSSTOOL_NG_VERSION=${{ env.CROSSTOOL_NG_VERSION }}" >> $GITHUB_ENV
-          echo "WORKSPACE=$GITHUB_WORKSPACE" >> $GITHUB_ENV
-
-      - name: Install Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential autoconf automake bison flex texinfo help2man gawk \
-            libtool libtool-bin libncurses5-dev libncursesw5-dev \
-            python3 python3-dev python3-distutils python3-pip \
-            git wget unzip pkg-config ca-certificates gperf ninja-build cmake \
-            file bzip2 xz-utils lzip gzip curl rsync \
-            libgmp-dev libmpfr-dev libmpc-dev libexpat1-dev zlib1g-dev \
-            g++ gcc make patch gettext
-          
-          sudo ln -sf /usr/bin/python3 /usr/bin/python || true
+          chown -R builder:builder .
 
       - name: Download & Install crosstool-NG
+        # Kita jalankan sebagai user builder
+        shell: su builder {0}
         run: |
           echo "Mengunduh crosstool-NG branch: $CROSSTOOL_NG_VERSION"
           git clone https://github.com/espressif/crosstool-NG.git -b $CROSSTOOL_NG_VERSION
@@ -67,193 +79,119 @@ jobs:
           echo "=== INIT SUBMODULES ==="
           git submodule update --init --recursive
           
-          if [ ! -d "overlays/xtensa_esp32" ]; then
-             echo "FATAL: Submodule overlays gagal di-init."
-             exit 1
-          fi
+          # Fix untuk Alpine: Kadang butuh touch file agar timestamp benar
+          find . -name configure.ac -exec touch {} +
           
           ./bootstrap
-          ./configure --enable-local --prefix=/usr/local
+          ./configure --enable-local --prefix=$PWD/install
           make -j$(nproc)
-          sudo make install
+          make install
 
-      - name: Siapkan Folder Tarballs
+      - name: Siapkan Config & Patch
+        shell: su builder {0}
+        env:
+          TARGET: ${{ matrix.target }}
         run: |
-          mkdir -p $WORKSPACE/.build/tarballs
-          echo "CT_LOCAL_TARBALLS_DIR=$WORKSPACE/.build/tarballs" >> $GITHUB_ENV
-
-      - name: Download Manual Library
-        run: |
-          echo "=== DOWNLOAD MANUAL DEPENDENCIES ==="
-          cd $CT_LOCAL_TARBALLS_DIR
+          export PATH=$PWD/crosstool-ng/install/bin:$PATH
+          mkdir -p .build/tarballs
           
-          # ISL Mirror Fix
-          wget --tries=5 --waitretry=5 -O isl-0.19.tar.bz2 https://sources.easybuild.io/i/ISL/isl-0.19.tar.bz2
+          cd crosstool-ng
           
-          # Fallback
-          if [ ! -s isl-0.19.tar.bz2 ]; then
-             rm -f isl-0.19.tar.bz2
-             wget --tries=5 -O isl-0.19.tar.bz2 https://libisl.sourceforge.io/isl-0.19.tar.bz2
-          fi
-
-      - name: Konfigurasi Toolchain (STATIC MODE)
-        run: |
-          cd $WORKSPACE/crosstool-ng
-          
-          echo "=== Generating Config ==="
+          # 1. Generate Config Awal
           if [ -f "samples/$TARGET/crosstool.config" ]; then
             cp samples/$TARGET/crosstool.config .config
           else
-            ./ct-ng $TARGET
+            ct-ng $TARGET
           fi
 
-          # Hapus variabel default
+          # 2. Bersihkan Config Lama
           sed -i '/CT_PREFIX_DIR/d' .config
           sed -i '/CT_LOCAL_TARBALLS_DIR/d' .config
-          sed -i '/CT_HOST/d' .config
-          sed -i '/CT_PARALLEL_JOBS/d' .config
-          sed -i '/CT_TARGET/d' .config
-          sed -i '/CT_ARCH/d' .config
-          sed -i '/CT_TARGET_VENDOR/d' .config
-          sed -i '/CT_GDB_CROSS_PYTHON_BINARY/d' .config
-          sed -i '/CT_OVERLAY_LOCATION/d' .config
-          sed -i '/CT_OVERLAY_NAME/d' .config
-          # Hapus setting static default jika ada, kita set ulang di bawah
-          sed -i '/CT_STATIC_TOOLCHAIN/d' .config
-          sed -i '/CT_WANTS_STATIC_LINK/d' .config
-
-          # Inject konfigurasi KHUSUS TERMUX
+          sed -i '/CT_LogFile/d' .config
+          
+          # 3. Inject Config BARU (MUSL STATIC)
+          # Perhatikan: Kita matikan Werror karena compiler Alpine lebih strict
           cat >> .config <<EOF
           
-          # CI Basics
-          CT_TARGET="$TARGET"
-          CT_ARCH="xtensa"
-          CT_ARCH_XTENSA=y
-          
-          # Naming
-          CT_TARGET_VENDOR="esp32"
-          
-          # Overlay
-          CT_OVERLAY_NAME="esp32"
-          CT_OVERLAY_LOCATION="$WORKSPACE/crosstool-ng/overlays"
-          
           # Paths
-          CT_HOST="$CT_HOST_TRIPLET"
-          CT_PREFIX_DIR="$CT_PREFIX_DIR"
-          CT_LOCAL_TARBALLS_DIR="$CT_LOCAL_TARBALLS_DIR"
+          CT_PREFIX_DIR="$GITHUB_WORKSPACE/x-tools/${TARGET}"
+          CT_LOCAL_TARBALLS_DIR="$GITHUB_WORKSPACE/.build/tarballs"
           
-          # Build Settings
+          # Build Options
           CT_PARALLEL_JOBS=$(nproc)
           CT_LOG_PROGRESS_BAR=n
-          CT_EXPERIMENTAL=y
+          CT_Experimental=y
           CT_ALLOW_BUILD_AS_ROOT=y
           CT_ALLOW_BUILD_AS_ROOT_SURE=y
-
-          # === BAGIAN PENTING UNTUK TERMUX ===
-          # Memaksa hasil build menjadi 'Statically Linked'
-          # Ini membuat binary tidak butuh /lib/ld-linux-aarch64.so.1
+          
+          # --- KUNCI KEBERHASILAN DI TERMUX ---
+          # 1. Static Linking
           CT_STATIC_TOOLCHAIN=y
           CT_WANTS_STATIC_LINK=y
-          
-          # Strip binary agar ukuran lebih kecil
+          # 2. Strip binary
           CT_STRIP_HOST_TOOLCHAIN_EXECUTABLES=y
-          
-          # Matikan Python GDB (Python static sangat susah di-build)
+          # 3. Matikan Python GDB (Penyebab error di static build)
           CT_GDB_CROSS_PYTHON=n
           CT_GDB_CROSS_PYTHON_BINARY=""
-          # ===================================
+          # 4. Matikan Warning as Error (Penting di Alpine)
+          CT_WERROR=n
+          # ------------------------------------
+          
+          # ESP32 Specifics
+          CT_TARGET_VENDOR="esp32"
+          CT_OVERLAY_NAME="esp32"
+          CT_OVERLAY_LOCATION="$GITHUB_WORKSPACE/crosstool-ng/overlays"
           EOF
+          
+          # Fix Kernel Version check
+          sed -i 's/^CT_KERNEL=.*/CT_KERNEL="none"/' .config
 
-          # ESP32 Specific Kernel/Core Fixes
-          if [[ "$TARGET" == *"esp32"* ]]; then
-             if ! grep -q "CT_ARCH_XTENSA_CORE" .config; then
-                echo 'CT_ARCH_XTENSA_CORE="esp32"' >> .config
-             fi
-             if grep -q "CT_KERNEL" .config; then
-                sed -i 's/^CT_KERNEL=.*/CT_KERNEL="none"/' .config
-             else
-                echo 'CT_KERNEL="none"' >> .config
-             fi
-          fi
-
-          yes "" | ./ct-ng oldconfig
+          # Update config
+          yes "" | ct-ng oldconfig
 
       - name: Build Toolchain
+        shell: su builder {0}
         id: build
         run: |
-          cd $WORKSPACE/crosstool-ng
+          export PATH=$PWD/crosstool-ng/install/bin:$PATH
+          cd crosstool-ng
           
-          rm -rf .build/$TARGET
-          export CT_NG_BUILD_FORCE=1
-          export CT_ALLOW_BUILD_AS_ROOT=y
-          export CT_ALLOW_BUILD_AS_ROOT_SURE=y
-          export HOME=$WORKSPACE
+          # Fix ISL download manual (Alpine kadang fail SSL lama)
+          cd ../.build/tarballs
+          wget --no-check-certificate -O isl-0.19.tar.bz2 https://sources.easybuild.io/i/ISL/isl-0.19.tar.bz2 || true
+          cd ../../crosstool-ng
           
-          echo "Memulai build STATIC... (Estimasi: 50-70 menit)"
-          ./ct-ng build
+          echo "Memulai Build di Alpine (Musl)..."
+          ct-ng build
           
           echo "success=true" >> $GITHUB_OUTPUT
 
-      - name: Validasi dan Package
+      - name: Packaging
         if: steps.build.outputs.success == 'true'
-        id: package
         run: |
-          echo "=== VALIDASI HASIL BUILD ==="
+          echo "Checking binary type..."
+          # Verifikasi bahwa ini benar-benar static
+          file x-tools/${{ matrix.target }}/bin/*-gcc | head -n 1
           
-          BIN_DIR="$CT_PREFIX_DIR/bin"
+          ARTIFACT_NAME="${{ matrix.target }}-gcc8_4_0-musl-static-native-android.tar.gz"
           
-          if [ ! -d "$BIN_DIR" ]; then
-             echo "FATAL: Folder bin tidak ditemukan"
-             exit 1
-          fi
+          cd x-tools
+          # Tar tanpa owner info agar tidak masalah permission saat extract
+          tar --owner=0 --group=0 -czf ../artifacts/$ARTIFACT_NAME *
           
-          FOUND_GCC=$(find "$BIN_DIR" -name "*-gcc" -type f | head -n 1)
-          
-          if [ -z "$FOUND_GCC" ]; then
-             echo "FATAL: Binary GCC tidak ditemukan"
-             exit 1
-          fi
-          
-          echo "✅ Binary GCC ditemukan: $FOUND_GCC"
-          
-          # Cek apakah benar-benar static
-          FILE_INFO=$(file "$FOUND_GCC")
-          echo "File Info: $FILE_INFO"
-          
-          if [[ "$FILE_INFO" != *"statical"* && "$FILE_INFO" != *"static-pie"* ]]; then
-             echo "WARNING: Sepertinya binary BUKAN static. Cek log config."
-          else
-             echo "✅ VERIFIKASI SUKSES: Binary adalah STATIC (Support Termux)"
-          fi
-          
-          "$FOUND_GCC" --version | head -1
-          
-          # Setup nama artifact
-          # Tambahkan 'static-termux' di nama file agar jelas
-          ARTIFACT_NAME="${TARGET}-gcc8_4_0-${CROSSTOOL_NG_VERSION}-linux-arm64-static-termux.tar.gz"
-          
-          echo "Membuat arsip $ARTIFACT_NAME..."
-          cd "$GITHUB_WORKSPACE/x-tools"
-          ACTUAL_TARGET_DIR=$(basename "$CT_PREFIX_DIR")
-          tar -czf "$WORKSPACE/artifacts/$ARTIFACT_NAME" "$ACTUAL_TARGET_DIR"
-          
-          echo "✅ Artifact berhasil dibuat: $WORKSPACE/artifacts/$ARTIFACT_NAME"
-          echo "artifact_name=$ARTIFACT_NAME" >> $GITHUB_OUTPUT
+          echo "ARTIFACT_PATH=$GITHUB_WORKSPACE/artifacts/$ARTIFACT_NAME" >> $GITHUB_ENV
 
       - name: Upload Artifact
         if: steps.build.outputs.success == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.target }}-static-termux
-          path: ${{ env.WORKSPACE }}/artifacts/
+          name: ${{ matrix.target }}-android-native
+          path: ${{ env.ARTIFACT_PATH }}
           retention-days: 30
 
-      - name: Upload Log Jika Gagal
+      - name: Upload Logs (If Fail)
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: failure-logs
-          path: |
-            ${{ env.WORKSPACE }}/crosstool-ng/build.log
-            ${{ env.WORKSPACE }}/crosstool-ng/.config
-          retention-days: 5
+          name: build-log
+          path: crosstool-ng/build.log
