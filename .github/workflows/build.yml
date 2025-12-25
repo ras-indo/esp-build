@@ -1,4 +1,4 @@
-name: Build All ESP32 Toolchains (Sample Trust)
+name: Build All ESP32 Toolchains (Symlink Hack Fix)
 
 on:
   push:
@@ -47,7 +47,7 @@ jobs:
           gh release delete "$TAG" --yes --cleanup-tag || true
           gh release create "$TAG" \
             --title "ESP32 Toolchains (Android Native) - $TAG" \
-            --notes "Build Valid (Trust Sample). Support: ESP32, S2, S3, C3, C6, H2. Static Musl." \
+            --notes "Build Ultimate (Symlink Hack). Support: ESP32, S2, S3, C3, C6, H2. Static Musl (No Proot)." \
             --draft=false \
             --prerelease=false
 
@@ -104,17 +104,36 @@ jobs:
           cd crosstool-NG
           git submodule update --init --recursive
           
+          # --- THE SYMLINK HACK (SOLUSI AJAIB) ---
+          # Ini mengatasi masalah "Overlay not found" apapun logikanya.
+          # Kita buat symlink agar 'xtensa_xtensa_esp32' mengarah ke 'xtensa_esp32' yang asli.
+          # Kita juga handle untuk S2 dan S3.
+          
+          cd overlays
+          echo "Applying Symlink Hack for Overlays..."
+          ln -s xtensa_esp32 xtensa_xtensa_esp32 || true
+          ln -s xtensa_esp32s2 xtensa_xtensa_esp32s2 || true
+          ln -s xtensa_esp32s3 xtensa_xtensa_esp32s3 || true
+          
+          # Just in case logicnya minta 'esp32' saja
+          ln -s xtensa_esp32 esp32 || true
+          ln -s xtensa_esp32s2 esp32s2 || true
+          ln -s xtensa_esp32s3 esp32s3 || true
+          
+          ls -la
+          cd ..
+          # ----------------------------------------
+          
           ./bootstrap
           ./configure --enable-local --prefix=/usr/local
           make -j$(nproc)
           make install
           
           # 3. Configure Target (Load Sample)
-          # Ini akan memuat setting BENAR untuk Overlay & Core
           ./ct-ng $TARGET_ARCH
           
-          # Clean Configs (HANYA PATH & OPSI BUILD)
-          # JANGAN HAPUS CT_OVERLAY_NAME atau CT_ARCH_XTENSA_CORE!
+          # Clean Configs (Hapus path & opsi build, TAPI JANGAN NAMA OVERLAY)
+          # Biarkan sample config menentukan nama overlay-nya.
           sed -i '/CT_PREFIX_DIR/d' .config
           sed -i '/CT_LOCAL_TARBALLS_DIR/d' .config
           sed -i '/CT_OVERLAY_LOCATION/d' .config
@@ -129,7 +148,8 @@ jobs:
           # Paths Override
           CT_PREFIX_DIR="${ROOT_DIR}/x-tools/${TARGET_ARCH}"
           CT_LOCAL_TARBALLS_DIR="${ROOT_DIR}/.build/tarballs"
-          # Paksa lokasi overlay ke folder checkout saat ini
+          
+          # Arahkan lokasi overlay ke folder yang sudah kita hack isinya tadi
           CT_OVERLAY_LOCATION="${ROOT_DIR}/crosstool-NG/overlays" 
           
           # Static Build Settings
