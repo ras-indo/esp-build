@@ -1,80 +1,101 @@
-
-name: Build All ESP32 Toolchains (Android Native)
+name: Build All ESP32 Toolchains (Auto & Manual)
 
 on:
+  # 1. Jalan Otomatis setiap ada Push ke branch main
+  push:
+    branches:
+      - 'main'
+  
+  # 2. Jalan Manual lewat tombol Actions (bisa tentukan nama tag)
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Tag Rilis (contoh: v13.2.0-esp-idf-5.x)"
-        required: true
-        default: "v13.2.0-r1"
+        description: "Tag Rilis (Kosongkan untuk Auto Date)"
+        required: false
+        default: ""
 
 permissions:
   contents: write
 
 env:
-  # Kita gunakan versi baru agar support ESP32-C6 dan H2
-  # GCC 13.2.0 cocok untuk ESP-IDF v5.1 ke atas
   CROSSTOOL_NG_VERSION: "esp-13.2.0_20240530"
 
 jobs:
   # --- JOB 1: SIAPKAN RELEASE ---
   prepare_release:
     runs-on: ubuntu-latest
+    outputs:
+      release_tag: ${{ steps.set_tag.outputs.release_tag }}
     steps:
       - name: Checkout Repo
         uses: actions/checkout@v4
 
-      - name: Setup Release
+      - name: Tentukan Tag Rilis
+        id: set_tag
+        env:
+          INPUT_TAG: ${{ github.event.inputs.release_tag }}
+        run: |
+          # Logika Cerdas penentuan Tag
+          if [ -n "$INPUT_TAG" ]; then
+            # Jika user input manual, pakai itu
+            TAG="$INPUT_TAG"
+          else
+            # Jika jalan otomatis (Push), buat tag pakai Tanggal-Jam
+            # Format: vYYYYMMDD-HHMM (Contoh: v20231225-0930)
+            TAG="v$(date +'%Y%m%d-%H%M')"
+          fi
+          
+          echo "Tag Rilis Terpilih: $TAG"
+          echo "release_tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Buat Release di GitHub
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.set_tag.outputs.release_tag }}
         run: |
-          TAG="${{ github.event.inputs.release_tag }}"
-          echo "Menyiapkan Release: $TAG"
-          
-          # Hapus release lama jika ada (untuk debugging)
+          # Cek jika release sudah ada (hapus dulu biar update)
           gh release delete "$TAG" --yes --cleanup-tag || true
           
           # Buat Release Baru
           gh release create "$TAG" \
-            --title "ESP32 Toolchains (Android/Termux Native) - $TAG" \
-            --notes "Toolchain Static (Musl) untuk Termux. Support: ESP32, S2, S3, C3, C6, H2. Tidak butuh Proot." \
+            --title "ESP32 Toolchains (Android Native) - $TAG" \
+            --notes "Build Otomatis Crosstool-NG ${{ env.CROSSTOOL_NG_VERSION }}. Support: ESP32, S2, S3, C3, C6, H2. Tanpa Proot." \
             --draft=false \
             --prerelease=false
 
   # --- JOB 2: BUILD PARALEL (MATRIX) ---
   build_toolchains:
     needs: prepare_release
-    runs-on: ubuntu-22.04-arm  # Runner ARM64 Wajib
+    runs-on: ubuntu-22.04-arm
     timeout-minutes: 360
     
     strategy:
       fail-fast: false
       matrix:
         target:
-          - xtensa-esp32-elf      # Classic ESP32
+          - xtensa-esp32-elf      # ESP32 Original
           - xtensa-esp32s2-elf    # ESP32-S2
           - xtensa-esp32s3-elf    # ESP32-S3
-          - riscv32-esp-elf       # RISC-V (ESP32-C3, C6, H2, P4)
+          - riscv32-esp-elf       # ESP32-C3, C6, H2, P4 (RISC-V All in One)
 
     steps:
       - name: Checkout Repo
         uses: actions/checkout@v4
 
-      - name: Generate Build Script (Alpine Static)
+      - name: Generate Build Script (Nuclear Static)
         run: |
           cat > build_script.sh << 'EOF'
           #!/bin/sh
           set -e
           
-          # --- CONFIGURATION ---
+          # Config
           TARGET_ARCH="${TARGET_ARG}"
           CT_VERSION="${VERSION_ARG}"
           ROOT_DIR="/workspace"
           
-          echo "=== [ALPINE] Building Target: $TARGET_ARCH ==="
+          echo "=== [ALPINE] Building: $TARGET_ARCH ==="
           
-          # 1. Install Dependencies (Alpine 3.18 support GCC 13)
+          # 1. Install Dependencies
           apk update
           apk add --no-cache \
             build-base git bash autoconf automake bison flex texinfo \
@@ -87,18 +108,15 @@ jobs:
           ln -sf /usr/bin/python3 /usr/bin/python
           git config --global --add safe.directory '*'
           
-          # --- NUCLEAR STATIC FLAGS ---
-          # Memaksa seluruh binary (termasuk cc1, lto) jadi static
+          # NUCLEAR FLAGS (Force Static)
           export CFLAGS="-static -O2"
           export CXXFLAGS="-static -O2"
           export LDFLAGS="-static"
 
-          # 2. Setup Workspace
+          # 2. Setup & Clone
           mkdir -p $ROOT_DIR/x-tools $ROOT_DIR/artifacts $ROOT_DIR/.build/tarballs
           cd $ROOT_DIR
           
-          # 3. Clone Crosstool-NG
-          echo "Downloading Crosstool-NG ($CT_VERSION)..."
           git clone https://github.com/espressif/crosstool-NG.git -b $CT_VERSION crosstool-NG
           cd crosstool-NG
           git submodule update --init --recursive
@@ -108,11 +126,10 @@ jobs:
           make -j$(nproc)
           make install
           
-          # 4. Configure Target
-          echo "Configuring $TARGET_ARCH..."
+          # 3. Configure
           ./ct-ng $TARGET_ARCH
           
-          # Clean default configs
+          # Clean Configs
           sed -i '/CT_PREFIX_DIR/d' .config
           sed -i '/CT_LOCAL_TARBALLS_DIR/d' .config
           sed -i '/CT_LOG_PROGRESS_BAR/d' .config
@@ -121,73 +138,52 @@ jobs:
           sed -i '/CT_CC_CX_LDFLAGS/d' .config
           sed -i '/CT_LDFLAGS_FOR_HOST/d' .config
 
-          # Inject STATIC Config
+          # Inject Config
           cat >> .config <<CONFIG_EOF
-          # Paths
           CT_PREFIX_DIR="${ROOT_DIR}/x-tools/${TARGET_ARCH}"
           CT_LOCAL_TARBALLS_DIR="${ROOT_DIR}/.build/tarballs"
-          
-          # Build Performance
           CT_ALLOW_BUILD_AS_ROOT=y
           CT_ALLOW_BUILD_AS_ROOT_SURE=y
           CT_EXPERIMENTAL=y
           CT_LOG_PROGRESS_BAR=n
           CT_PARALLEL_JOBS=$(nproc)
+          CT_ARCH_XTENSA_CORE="esp32"
           
-          # TARGET SPECIFIC (Vendor override if needed)
-          CT_ARCH_XTENSA_CORE="esp32" # Default fallback, will be ignored by riscv
-          
-          # --- STATIC FORCE ---
+          # STATIC FORCE
           CT_STATIC_TOOLCHAIN=y
           CT_WANTS_STATIC_LINK=y
           CT_CC_CX_LDFLAGS="-static"
           CT_LDFLAGS_FOR_HOST="-static"
           CT_STRIP_HOST_TOOLCHAIN_EXECUTABLES=y
           
-          # DISABLE PYTHON GDB (Wajib untuk static)
+          # NO PYTHON
           CT_GDB_CROSS_PYTHON=n
           CT_GDB_CROSS_PYTHON_BINARY=""
           CT_KERNEL="none"
           CONFIG_EOF
 
-          # RISC-V Specific Fixes (Karena satu compiler utk banyak chip)
-          if [ "$TARGET_ARCH" = "riscv32-esp-elf" ]; then
-             # Pastikan multilib aktif agar support C3, C6, H2
-             # Biasanya default config riscv32-esp-elf sudah handle ini
-             echo "Building RISC-V Combined Toolchain..."
-          fi
-
           yes "" | ./ct-ng oldconfig
           
-          # 5. Build
-          echo "Starting Build... (Hold tight!)"
+          # 4. Build
+          echo "Starting Build..."
           export CT_ALLOW_BUILD_AS_ROOT=y
           export CT_ALLOW_BUILD_AS_ROOT_SURE=y
           ./ct-ng build
           
-          # 6. Packaging (Anti 0-Byte Fix)
-          echo "Packaging..."
+          # 5. Packaging (Hard Dereference)
           cd $ROOT_DIR/x-tools
-          
           TAR_NAME="${TARGET_ARCH}-android-native.tar.gz"
-          
-          # Gunakan --hard-dereference agar hardlink jadi file fisik
           tar --hard-dereference -czf $ROOT_DIR/artifacts/$TAR_NAME ${TARGET_ARCH}
           
-          # Buat Checksum
+          # Checksum
           cd $ROOT_DIR/artifacts
           sha256sum $TAR_NAME > ${TAR_NAME}.sha256
-          
-          echo "DONE: $TAR_NAME"
           EOF
           
           chmod +x build_script.sh
 
       - name: Run Build in Docker (Alpine 3.18)
         run: |
-          echo "Menjalankan Build Container untuk ${{ matrix.target }}..."
-          
-          # Gunakan Alpine 3.18 (Support GCC 13 lebih baik dari 3.17)
           docker run --rm --privileged \
             -v "${{ github.workspace }}:/workspace" \
             -w "/workspace" \
@@ -199,10 +195,9 @@ jobs:
       - name: Upload to Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare_release.outputs.release_tag }}
         run: |
-          TAG="${{ github.event.inputs.release_tag }}"
-          echo "Mengupload ${{ matrix.target }} ke release $TAG..."
-          
+          echo "Mengupload ke release: $TAG"
           cd artifacts
           gh release upload "$TAG" \
             ${{ matrix.target }}-android-native.tar.gz \
