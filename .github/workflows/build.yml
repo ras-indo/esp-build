@@ -1,5 +1,4 @@
-
-name: Build All ESP32 Toolchains (Final Fix)
+name: Build All ESP32 Toolchains (Overlay Fixed)
 
 on:
   push:
@@ -48,7 +47,7 @@ jobs:
           gh release delete "$TAG" --yes --cleanup-tag || true
           gh release create "$TAG" \
             --title "ESP32 Toolchains (Android Native) - $TAG" \
-            --notes "Build Fix Overlay. Support: ESP32, S2, S3, C3, C6, H2. Static Musl." \
+            --notes "Build Fix Overlay & Core. Support: ESP32, S2, S3, C3, C6, H2. Static Musl." \
             --draft=false \
             --prerelease=false
 
@@ -62,10 +61,10 @@ jobs:
       fail-fast: false
       matrix:
         target:
-          - xtensa-esp32-elf
-          - xtensa-esp32s2-elf
-          - xtensa-esp32s3-elf
-          - riscv32-esp-elf
+          - xtensa-esp32-elf      # ESP32
+          - xtensa-esp32s2-elf    # S2
+          - xtensa-esp32s3-elf    # S3
+          - riscv32-esp-elf       # C3, C6, H2
 
     steps:
       - name: Checkout Repo
@@ -110,7 +109,7 @@ jobs:
           make -j$(nproc)
           make install
           
-          # 3. Configure Target
+          # 3. Configure Target (Load Default Sample)
           ./ct-ng $TARGET_ARCH
           
           # Clean Configs
@@ -124,6 +123,8 @@ jobs:
           # Hapus config overlay bawaan agar tidak konflik
           sed -i '/CT_OVERLAY_NAME/d' .config
           sed -i '/CT_OVERLAY_LOCATION/d' .config
+          # Hapus config Core bawaan dari variable override (biarkan ct-ng mengatur default)
+          sed -i '/CT_ARCH_XTENSA_CORE/d' .config
 
           # Inject Basic Config
           cat >> .config <<CONFIG_EOF
@@ -148,17 +149,14 @@ jobs:
           CT_KERNEL="none"
           CONFIG_EOF
 
-          # --- LOGIC KHUSUS OVERLAY (FIXED) ---
-          # Hanya Xtensa yang butuh Overlay "xtensa_esp32"
-          # RISC-V tidak boleh pakai overlay ini.
-          
+          # --- LOGIC KHUSUS OVERLAY (FIXED NAME) ---
           case "$TARGET_ARCH" in
             xtensa*)
               echo "=== Applying Xtensa Overlay ==="
               cat >> .config <<OVERLAY_EOF
-          CT_ARCH_XTENSA_CORE="esp32"
-          # PERBAIKAN: Nama folder asli di git adalah 'xtensa_esp32'
-          CT_OVERLAY_NAME="xtensa_esp32"
+          # Fix: Gunakan 'esp32' saja, ct-ng akan menambah prefix 'xtensa_' otomatis
+          # Hasilnya: xtensa_esp32 (sesuai nama folder asli)
+          CT_OVERLAY_NAME="esp32"
           CT_OVERLAY_LOCATION="${ROOT_DIR}/crosstool-NG/overlays"
           OVERLAY_EOF
               ;;
@@ -174,7 +172,6 @@ jobs:
           export CT_ALLOW_BUILD_AS_ROOT=y
           export CT_ALLOW_BUILD_AS_ROOT_SURE=y
           
-          # Unset flag berbahaya
           unset CFLAGS CXXFLAGS LDFLAGS
           
           ./ct-ng build
