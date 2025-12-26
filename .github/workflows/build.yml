@@ -1,4 +1,4 @@
-name: Build ESP32 All Variants Native Android (V4 - Total Static Native ARM)
+name: Build ESP32 All Variants Native Android (V4 - Total Static)
 
 on:
   push:
@@ -14,7 +14,7 @@ env:
 
 jobs:
   build-native-nuclear:
-    # MENGGUNAKAN RUNNER NATIVE ARM (GRATIS UNTUK PUBLIC REPO)
+    # Menggunakan Runner ARM64 Native dari GitHub Actions
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 360
     strategy:
@@ -37,19 +37,11 @@ jobs:
           path: .build/tarballs
           restore-keys: tarballs-${{ env.CROSSTOOL_NG_VERSION }}
 
-      - name: 2. Buat Script Build (Native ARM64)
+      - name: 2. Buat Script Build (Nuclear Static ARM64)
         run: |
           cat > build_script.sh << 'EOF'
           #!/bin/sh
           set -e
-          
-          echo "=== System Architecture Check ==="
-          ARCH_CHECK=$(uname -m)
-          echo "Host Architecture: $ARCH_CHECK"
-          if [ "$ARCH_CHECK" != "aarch64" ]; then
-             echo "ERROR: Runner ini bukan ARM64! Cek konfigurasi workflow."
-             exit 1
-          fi
           
           echo "=== [ALPINE ARM64] Setup Dependencies ==="
           apk update
@@ -72,7 +64,7 @@ jobs:
           export OVERLAY="${OVERLAY_ARG}"
           git config --global --add safe.directory '*'
 
-          echo "=== [ALPINE ARM64] Clean & Clone ==="
+          echo "=== [ALPINE] Clean & Clone ==="
           rm -rf crosstool-NG x-tools artifacts
           mkdir -p x-tools artifacts .build/tarballs
           
@@ -85,7 +77,7 @@ jobs:
           make -j$(nproc)
           cd ..
 
-          echo "=== [ALPINE ARM64] Download ISL ==="
+          echo "=== [ALPINE] Download ISL ==="
           cd .build/tarballs
           if [ ! -f isl-0.19.tar.bz2 ]; then
             wget --tries=5 --waitretry=5 -O isl-0.19.tar.bz2 https://sources.easybuild.io/i/ISL/isl-0.19.tar.bz2 || \
@@ -93,14 +85,17 @@ jobs:
           fi
           cd ../..
 
-          echo "=== [ALPINE ARM64] Configure Toolchain ==="
+          echo "=== [ALPINE] Configure Toolchain ==="
           cd crosstool-NG
+          
+          # Hapus config lama
           rm -f .config
           
-          # === CONFIGURATION BLOCK ===
+          # === KONFIGURASI MANUAL (NUCLEAR) ===
           if [ "${ARCH}" = "xtensa" ]; then
             echo "=== Configuring Xtensa target: ${TARGET} ==="
             cat > .config <<CONFIG_EOF
+          # CONFIGURATION FOR XTENSA
           CT_OBSOLETE=y
           CT_EXPERIMENTAL=y
           CT_ALLOW_BUILD_AS_ROOT=y
@@ -123,7 +118,7 @@ jobs:
           CT_ARCH_XTENSA_CORE="${CORE}"
           CT_ARCH_SUFFIX=""
           
-          # --- KERNEL: BARE METAL (FIXED) ---
+          # --- KERNEL: BARE METAL (FIXED SEGFAULT) ---
           CT_BARE_METAL=y
           CT_KERNEL="bare-metal"
           CT_KERNEL_bare_metal=y
@@ -144,7 +139,7 @@ jobs:
           CT_GCC_VERSION="15.2.0"
           CT_GCC_LANGUAGES="c,c++"
           
-          # --- DISABLE TEST SUITE (Prevents Segfault) ---
+          # --- DISABLE TEST SUITE ---
           CT_TEST_SUITE_GCC=n
           
           # --- LIBRARIES ---
@@ -169,7 +164,7 @@ jobs:
           CT_OVERLAY_DOWNLOAD=y
           CT_STRIP_HOST_TOOLCHAIN_EXECUTABLES=y
 
-          # --- STATIC BUILD (NUCLEAR) ---
+          # --- STATIC BUILD (ANDROID READY) ---
           CT_STATIC_TOOLCHAIN=y
           CT_WANTS_STATIC_LINK=y
           CT_CC_CX_LDFLAGS="-static -Wl,-Bstatic"
@@ -182,6 +177,7 @@ jobs:
           elif [ "${ARCH}" = "riscv" ]; then
             echo "=== Configuring RISC-V target: ${TARGET} ==="
             cat > .config <<CONFIG_EOF
+          # CONFIGURATION FOR RISC-V
           CT_OBSOLETE=y
           CT_EXPERIMENTAL=y
           CT_ALLOW_BUILD_AS_ROOT=y
@@ -205,7 +201,7 @@ jobs:
           CT_ARCH_FLOAT_ABI=""
           CT_ARCH_SUFFIX="32"
           
-          # --- KERNEL: BARE METAL (FIXED) ---
+          # --- KERNEL: BARE METAL ---
           CT_BARE_METAL=y
           CT_KERNEL="bare-metal"
           CT_KERNEL_bare_metal=y
@@ -251,7 +247,7 @@ jobs:
           CT_OVERLAY_DOWNLOAD=y
           CT_STRIP_HOST_TOOLCHAIN_EXECUTABLES=y
 
-          # --- STATIC BUILD (NUCLEAR) ---
+          # --- STATIC BUILD (ANDROID READY) ---
           CT_STATIC_TOOLCHAIN=y
           CT_WANTS_STATIC_LINK=y
           CT_CC_CX_LDFLAGS="-static -Wl,-Bstatic"
@@ -265,10 +261,14 @@ jobs:
             exit 1
           fi
 
-          echo "=== [ALPINE ARM64] Validasi Konfigurasi ==="
+          echo "=== [ALPINE] Validasi Konfigurasi ==="
+          echo "Target: ${TARGET}"
+          
+          echo "Running oldconfig..."
+          # Gunakan 'yes n' untuk auto-answer NO (penting untuk menghindari segfault pada prompt baru)
           yes "n" | ./ct-ng oldconfig 2>&1 | tail -50
 
-          echo "=== [ALPINE ARM64] Building... ==="
+          echo "=== [ALPINE] Building... ==="
           unset CFLAGS CXXFLAGS LDFLAGS CPPFLAGS
           export CT_ALLOW_BUILD_AS_ROOT=y
           export CT_ALLOW_BUILD_AS_ROOT_SURE=y
@@ -277,37 +277,37 @@ jobs:
           echo "Building with $JOBS jobs..."
           ./ct-ng build.$JOBS
           
-          echo "=== [ALPINE ARM64] Validasi Binary ==="
+          echo "=== [ALPINE] Validasi Deep (Cek cc1) ==="
           BIN_DIR="${ROOT_DIR}/x-tools/${TARGET}"
-          COMPILER="${BIN_DIR}/bin/${TARGET}-gcc"
           
+          COMPILER="${BIN_DIR}/bin/${TARGET}-gcc"
           if [ -f "$COMPILER" ]; then
-            echo "Compiler info:"
+            echo "Compiler ditemukan: $COMPILER"
             file "$COMPILER"
-            # Pastikan binary adalah ARM aarch64
-            if file "$COMPILER" | grep -q "aarch64"; then
-               echo "SUKSES: Binary adalah ARM64 (Native Android Compatible)"
+            # Pastikan binary ARM64
+            if file "$COMPILER" | grep -q "ARM aarch64"; then
+               echo "SUKSES: Binary adalah ARM64."
             else
-               echo "WARNING: Binary sepertinya bukan ARM64!"
+               echo "WARNING: Binary BUKAN ARM64 (Mungkin cross-compile salah?)"
             fi
           else
             echo "WARNING: Compiler tidak ditemukan"
           fi
 
-          echo "=== [ALPINE ARM64] Packaging ==="
+          echo "=== [ALPINE] Packaging ==="
           cd ${ROOT_DIR}/x-tools
-          TAR_NAME="${TARGET}-gcc15_2_0-android-native-nuclear-arm64.tar.gz"
+          TAR_NAME="${TARGET}-gcc15_2_0-android-native-nuclear.tar.gz"
           tar --hard-dereference --preserve-permissions -czf ${ROOT_DIR}/artifacts/$TAR_NAME ${TARGET}
           
-          echo "Selesai. Artifact: ${ROOT_DIR}/artifacts/$TAR_NAME"
+          echo "Done. Artifact: ${ROOT_DIR}/artifacts/$TAR_NAME"
           EOF
           
           chmod +x build_script.sh
 
-      - name: 3. Jalankan Docker (Native ARM64)
+      - name: 3. Jalankan Docker (ARM64 Native)
         run: |
-          echo "Menjalankan Build di Container ARM64 (Host Native)..."
-          # Tidak perlu --platform linux/arm64 karena host sudah ARM
+          echo "Running Docker Build for ${{ matrix.target.name }}..."
+          # Karena Host sudah ARM64, Alpine akan otomatis pull image ARM64.
           docker run --rm --privileged \
             -v "${{ github.workspace }}:/workspace" \
             -w "/workspace" \
@@ -323,7 +323,7 @@ jobs:
       - name: 4. Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: toolchain-${{ matrix.target.name }}-android-arm64
+          name: toolchain-${{ matrix.target.name }}-android-native-nuclear
           path: artifacts/*.tar.gz
           retention-days: 30
           
@@ -343,7 +343,7 @@ jobs:
       - name: Download All Artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: toolchain-*-android-arm64
+          pattern: toolchain-*-android-native-nuclear
           path: downloaded-artifacts
           merge-multiple: true
 
@@ -351,11 +351,11 @@ jobs:
         run: |
           mkdir -p combined
           mv downloaded-artifacts/*.tar.gz combined/
-          zip -r all-esp-toolchains-android-arm64.zip combined/
+          zip -r all-esp-toolchains-android-native-nuclear.zip combined/
           
       - name: Upload Combined ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: all-esp-toolchains-android-arm64
-          path: all-esp-toolchains-android-arm64.zip
+          name: all-esp-toolchains-android-native-nuclear
+          path: all-esp-toolchains-android-native-nuclear.zip
           retention-days: 30
