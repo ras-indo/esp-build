@@ -1,4 +1,57 @@
-# --- JOB 2: BUILD PARALEL (MATRIX) ---
+name: Build All ESP32 Toolchains (Final V7 - Alpine Fix)
+
+on:
+  push:
+    branches:
+      - 'main'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Tag Rilis (Kosongkan untuk Auto Date)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+env:
+  CROSSTOOL_NG_VERSION: "esp-13.2.0_20240530"
+
+jobs:
+  # --- JOB 1: SIAPKAN RELEASE ---
+  prepare_release:
+    runs-on: ubuntu-latest
+    outputs:
+      release_tag: ${{ steps.set_tag.outputs.release_tag }}
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+
+      - name: Tentukan Tag Rilis
+        id: set_tag
+        env:
+          INPUT_TAG: ${{ github.event.inputs.release_tag }}
+        run: |
+          if [ -n "$INPUT_TAG" ]; then
+            TAG="$INPUT_TAG"
+          else
+            TAG="v$(date +'%Y%m%d-%H%M')"
+          fi
+          echo "release_tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Buat Release di GitHub
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.set_tag.outputs.release_tag }}
+        run: |
+          gh release delete "$TAG" --yes --cleanup-tag || true
+          gh release create "$TAG" \
+            --title "ESP32 Toolchains (Android Native) - $TAG" \
+            --notes "Build Ultimate V7. Support: ESP32, S2, S3, C3, C6, H2. Static Musl. (Fixed Rsync Issue)" \
+            --draft=false \
+            --prerelease=false
+
+  # --- JOB 2: BUILD PARALEL (MATRIX) ---
   build_toolchains:
     needs: prepare_release
     runs-on: ubuntu-22.04-arm
@@ -31,7 +84,7 @@
           echo "=== [ALPINE] Building: $TARGET_ARCH ==="
           
           # 1. Install Dependencies
-          # PERBAIKAN: Menambahkan 'rsync' dan 'zip' asli. Menghapus 'bash' jika tidak dipakai script lain.
+          # PERBAIKAN: Menambahkan 'rsync', 'zip', 'sed' asli agar kompatibel dengan script build Espressif
           apk update
           apk add --no-cache \
             build-base git bash autoconf automake bison flex texinfo \
@@ -45,10 +98,6 @@
           ln -sf /usr/bin/python3 /usr/bin/python
           git config --global --add safe.directory '*'
 
-          # --- HAPUS BAGIAN FAKE RSYNC ---
-          # Crosstool-NG membutuhkan rsync asli untuk menangani permission dan exclude pattern
-          # yang tidak bisa ditangani oleh script 'cp' sederhana.
-          
           # 2. Setup & Clone
           mkdir -p $ROOT_DIR/x-tools $ROOT_DIR/artifacts $ROOT_DIR/.build/tarballs
           cd $ROOT_DIR
@@ -58,6 +107,7 @@
           git submodule update --init --recursive
           
           # --- STRATEGI BRUTE FORCE OVERLAY ---
+          # Copy folder ke semua kemungkinan nama agar pasti ketemu
           cd overlays
           echo "Applying Overlay Duplication..."
           for chip in esp32 esp32s2 esp32s3; do
@@ -74,7 +124,7 @@
           make -j$(nproc)
           make install
           
-          # 3. Configure Target
+          # 3. Configure Target (Load Sample)
           ./ct-ng $TARGET_ARCH
           
           # Clean Configs
@@ -91,6 +141,7 @@
           cat >> .config <<CONFIG_EOF
           CT_PREFIX_DIR="${ROOT_DIR}/x-tools/${TARGET_ARCH}"
           CT_LOCAL_TARBALLS_DIR="${ROOT_DIR}/.build/tarballs"
+          # Arahkan ke folder overlay yang sudah kita brute-force isinya
           CT_OVERLAY_LOCATION="${ROOT_DIR}/crosstool-NG/overlays"
           
           # Static Build Settings
