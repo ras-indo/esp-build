@@ -1,4 +1,4 @@
-name: Build ESP32 All Variants Native Android (V4 - Total Static ARM64)
+name: Build ESP32 All Variants Native Android (V4 - Total Static Native ARM)
 
 on:
   push:
@@ -14,8 +14,8 @@ env:
 
 jobs:
   build-native-nuclear:
-    # Kita gunakan runner x64 standar (lebih cepat & tersedia), tapi dengan QEMU untuk emulasi ARM
-    runs-on: ubuntu-24.04
+    # MENGGUNAKAN RUNNER NATIVE ARM (GRATIS UNTUK PUBLIC REPO)
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 360
     strategy:
       fail-fast: false
@@ -30,11 +30,6 @@ jobs:
       - name: 1. Checkout Repository
         uses: actions/checkout@v4
 
-      - name: 2. Set up QEMU (Agar bisa build ARM64 di runner x64)
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
-
       - name: Cache Tarballs
         uses: actions/cache@v4
         with:
@@ -42,18 +37,18 @@ jobs:
           path: .build/tarballs
           restore-keys: tarballs-${{ env.CROSSTOOL_NG_VERSION }}
 
-      - name: 3. Buat Script Build (Nuclear Static - ARM64 Android)
+      - name: 2. Buat Script Build (Native ARM64)
         run: |
           cat > build_script.sh << 'EOF'
           #!/bin/sh
           set -e
           
-          # Cek arsitektur saat ini (Harus aarch64)
           echo "=== System Architecture Check ==="
-          uname -m
-          if [ "$(uname -m)" != "aarch64" ]; then
-            echo "ERROR: Not running on ARM64! QEMU failed?"
-            exit 1
+          ARCH_CHECK=$(uname -m)
+          echo "Host Architecture: $ARCH_CHECK"
+          if [ "$ARCH_CHECK" != "aarch64" ]; then
+             echo "ERROR: Runner ini bukan ARM64! Cek konfigurasi workflow."
+             exit 1
           fi
           
           echo "=== [ALPINE ARM64] Setup Dependencies ==="
@@ -122,7 +117,7 @@ jobs:
           CT_USE_PIPES=y
           CT_LOAD=""
           
-          # --- ARCHITECTURE: XTENSA ---
+          # --- ARCHITECTURE: XTENSA (FIXED) ---
           CT_ARCH="xtensa"
           CT_ARCH_XTENSA=y
           CT_ARCH_XTENSA_CORE="${CORE}"
@@ -149,7 +144,7 @@ jobs:
           CT_GCC_VERSION="15.2.0"
           CT_GCC_LANGUAGES="c,c++"
           
-          # --- DISABLE TEST SUITE ---
+          # --- DISABLE TEST SUITE (Prevents Segfault) ---
           CT_TEST_SUITE_GCC=n
           
           # --- LIBRARIES ---
@@ -271,7 +266,6 @@ jobs:
           fi
 
           echo "=== [ALPINE ARM64] Validasi Konfigurasi ==="
-          # Jawab 'n' untuk pertanyaan interaktif (seperti test suite)
           yes "n" | ./ct-ng oldconfig 2>&1 | tail -50
 
           echo "=== [ALPINE ARM64] Building... ==="
@@ -283,7 +277,7 @@ jobs:
           echo "Building with $JOBS jobs..."
           ./ct-ng build.$JOBS
           
-          echo "=== [ALPINE ARM64] Validasi Binary (ELF Check) ==="
+          echo "=== [ALPINE ARM64] Validasi Binary ==="
           BIN_DIR="${ROOT_DIR}/x-tools/${TARGET}"
           COMPILER="${BIN_DIR}/bin/${TARGET}-gcc"
           
@@ -292,11 +286,9 @@ jobs:
             file "$COMPILER"
             # Pastikan binary adalah ARM aarch64
             if file "$COMPILER" | grep -q "aarch64"; then
-               echo "SUKSES: Binary adalah ARM64 (Compatible with Android)"
+               echo "SUKSES: Binary adalah ARM64 (Native Android Compatible)"
             else
-               echo "ERROR: Binary BUKAN ARM64! Cek konfigurasi Docker/QEMU."
-               file "$COMPILER"
-               # Jangan exit 1 agar artifact tetap ter-upload untuk di-debug, tapi beri warning keras
+               echo "WARNING: Binary sepertinya bukan ARM64!"
             fi
           else
             echo "WARNING: Compiler tidak ditemukan"
@@ -312,12 +304,11 @@ jobs:
           
           chmod +x build_script.sh
 
-      - name: 4. Jalankan Docker (ARM64 via QEMU)
+      - name: 3. Jalankan Docker (Native ARM64)
         run: |
-          echo "Menjalankan Build di Container ARM64..."
-          # Flag --platform linux/arm64 memaksa docker menggunakan arsitektur ARM
+          echo "Menjalankan Build di Container ARM64 (Host Native)..."
+          # Tidak perlu --platform linux/arm64 karena host sudah ARM
           docker run --rm --privileged \
-            --platform linux/arm64 \
             -v "${{ github.workspace }}:/workspace" \
             -w "/workspace" \
             -e CROSSTOOL_NG_VERSION_ARG="$CROSSTOOL_NG_VERSION" \
@@ -329,14 +320,14 @@ jobs:
             alpine:3.17 \
             /bin/sh /workspace/build_script.sh
 
-      - name: 5. Upload Artifact
+      - name: 4. Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: toolchain-${{ matrix.target.name }}-android-arm64
           path: artifacts/*.tar.gz
           retention-days: 30
           
-      - name: 6. Upload Logs
+      - name: 5. Upload Logs
         if: failure()
         uses: actions/upload-artifact@v4
         with:
