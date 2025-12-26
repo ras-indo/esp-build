@@ -1,5 +1,4 @@
-
-name: Build All ESP32 Toolchains (Final Robust)
+name: Build All ESP32 Toolchains (Final Ultimate Fix)
 
 on:
   push:
@@ -48,7 +47,7 @@ jobs:
           gh release delete "$TAG" --yes --cleanup-tag || true
           gh release create "$TAG" \
             --title "ESP32 Toolchains (Android Native) - $TAG" \
-            --notes "Build Robust (Copy Overlay). Support: ESP32, S2, S3, C3, C6, H2. Static Musl (No Proot)." \
+            --notes "Build Ultimate (Fake Rsync). Support: ESP32, S2, S3, C3, C6, H2. Static Musl." \
             --draft=false \
             --prerelease=false
 
@@ -74,7 +73,7 @@ jobs:
       - name: Generate Build Script
         run: |
           cat > build_script.sh << 'EOF'
-          #!/bin/sh
+          #!/bin/bash
           set -e
           
           # Config
@@ -89,13 +88,35 @@ jobs:
           apk add --no-cache \
             build-base git bash autoconf automake bison flex texinfo \
             gawk libtool ncurses-dev ncurses-static python3-dev \
-            unzip wget bzip2 xz help2man file rsync patch tar \
+            unzip wget bzip2 xz help2man file patch tar \
             expat-dev expat-static zlib-dev zlib-static \
             linux-headers gettext-dev gettext-static \
             gnu-libiconv-dev mpfr-dev gmp-dev mpc1-dev
 
           ln -sf /usr/bin/python3 /usr/bin/python
           git config --global --add safe.directory '*'
+
+          # --- TEKNIK SABOTASE RSYNC (PENTING!) ---
+          # Crosstool-NG menggunakan rsync untuk copy overlay, tapi sering gagal di Alpine.
+          # Kita buat 'fake rsync' yang sebenarnya adalah 'cp'.
+          
+          echo "Creating Fake Rsync..."
+          cat > /usr/bin/rsync << 'REOF'
+          #!/bin/bash
+          # Ambil 2 argumen terakhir (Source dan Destination)
+          last_arg="${!#}"
+          second_last_arg="${@: -2:1}"
+          
+          # Bersihkan trailing slash
+          src="${second_last_arg%/}"
+          dst="${last_arg%/}"
+          
+          echo "FAKERSYNC: Copying $src to $dst"
+          cp -rf "$src/." "$dst/"
+          REOF
+          
+          chmod +x /usr/bin/rsync
+          # ----------------------------------------
 
           # 2. Setup & Clone
           mkdir -p $ROOT_DIR/x-tools $ROOT_DIR/artifacts $ROOT_DIR/.build/tarballs
@@ -106,32 +127,17 @@ jobs:
           git submodule update --init --recursive
           
           # --- STRATEGI BRUTE FORCE OVERLAY ---
-          # Kita copy folder overlay asli ke semua kemungkinan nama.
-          # Ini menjamin path 'newlib' ditemukan oleh rsync.
-          
+          # Copy folder ke semua kemungkinan nama agar pasti ketemu
           cd overlays
-          echo "Applying Overlay Patch (Copy Strategy)..."
-          
+          echo "Applying Overlay Duplication..."
           for chip in esp32 esp32s2 esp32s3; do
-             # Folder Asli: xtensa_$chip (contoh: xtensa_esp32)
              ORIGIN="xtensa_$chip"
-             
              if [ -d "$ORIGIN" ]; then
-                echo "Patching $ORIGIN..."
-                
-                # 1. Copy ke nama double (xtensa_xtensa_esp32)
-                # Kasus jika config="xtensa_esp32" dan sistem nambah prefix "xtensa_"
                 cp -r "$ORIGIN" "xtensa_$ORIGIN"
-                
-                # 2. Copy ke nama polos (esp32)
-                # Kasus jika config="esp32" dan sistem TIDAK nambah prefix
                 cp -r "$ORIGIN" "$chip"
              fi
           done
-          
-          ls -la
           cd ..
-          # ----------------------------------------
           
           ./bootstrap
           ./configure --enable-local --prefix=/usr/local
@@ -153,10 +159,9 @@ jobs:
 
           # Inject Config
           cat >> .config <<CONFIG_EOF
-          # Paths Override
           CT_PREFIX_DIR="${ROOT_DIR}/x-tools/${TARGET_ARCH}"
           CT_LOCAL_TARBALLS_DIR="${ROOT_DIR}/.build/tarballs"
-          # Lokasi overlay di dalam workspace saat ini
+          # Arahkan ke folder overlay yang sudah kita brute-force isinya
           CT_OVERLAY_LOCATION="${ROOT_DIR}/crosstool-NG/overlays"
           
           # Static Build Settings
@@ -185,8 +190,6 @@ jobs:
           echo "Starting Build..."
           export CT_ALLOW_BUILD_AS_ROOT=y
           export CT_ALLOW_BUILD_AS_ROOT_SURE=y
-          
-          # Bersihkan environment variable yang bisa mengganggu
           unset CFLAGS CXXFLAGS LDFLAGS
           
           ./ct-ng build
@@ -194,11 +197,8 @@ jobs:
           # 5. Packaging
           cd $ROOT_DIR/x-tools
           TAR_NAME="${TARGET_ARCH}-android-native.tar.gz"
-          
-          # Hard Dereference: Wajib untuk Android agar tidak ada file 0-byte
           tar --hard-dereference -czf $ROOT_DIR/artifacts/$TAR_NAME ${TARGET_ARCH}
           
-          # Checksum
           cd $ROOT_DIR/artifacts
           sha256sum $TAR_NAME > ${TAR_NAME}.sha256
           EOF
@@ -213,7 +213,7 @@ jobs:
             -e TARGET_ARG="${{ matrix.target }}" \
             -e VERSION_ARG="${{ env.CROSSTOOL_NG_VERSION }}" \
             alpine:3.18 \
-            /bin/sh /workspace/build_script.sh
+            /bin/bash /workspace/build_script.sh
 
       - name: Upload to Release
         env:
