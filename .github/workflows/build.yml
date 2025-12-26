@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 env:
-  CROSSTOOL_NG_VERSION: 'esp-15.2.0'
+  CROSSTOOL_NG_VERSION: 'esp-15.2.0_20251204'
 
 jobs:
   build-native-nuclear:
@@ -27,6 +27,13 @@ jobs:
     steps:
       - name: 1. Checkout Repository
         uses: actions/checkout@v4
+
+      - name: Cache Tarballs
+        uses: actions/cache@v4
+        with:
+          key: tarballs-${{ env.CROSSTOOL_NG_VERSION }}-${{ matrix.target.name }}
+          path: .build/tarballs
+          restore-keys: tarballs-${{ env.CROSSTOOL_NG_VERSION }}
 
       - name: 2. Buat Script Build (Nuclear Static)
         run: |
@@ -62,7 +69,7 @@ jobs:
           # ---------------------------------------------
 
           echo "=== [ALPINE] Clean & Clone ==="
-          rm -rf crosstool-NG .build x-tools artifacts
+          rm -rf crosstool-NG x-tools artifacts
           mkdir -p x-tools artifacts .build/tarballs
           
           git clone https://github.com/espressif/crosstool-NG.git -b $CROSSTOOL_NG_VERSION
@@ -77,8 +84,10 @@ jobs:
 
           echo "=== [ALPINE] Download ISL ==="
           cd .build/tarballs
-          wget --tries=5 --waitretry=5 -O isl-0.19.tar.bz2 https://sources.easybuild.io/i/ISL/isl-0.19.tar.bz2 || \
-          wget --tries=5 -O isl-0.19.tar.bz2 https://libisl.sourceforge.io/isl-0.19.tar.bz2
+          if [ ! -f isl-0.19.tar.bz2 ]; then
+            wget --tries=5 --waitretry=5 -O isl-0.19.tar.bz2 https://sources.easybuild.io/i/ISL/isl-0.19.tar.bz2 || \
+            wget --tries=5 -O isl-0.19.tar.bz2 https://libisl.sourceforge.io/isl-0.19.tar.bz2
+          fi
           cd ../..
 
           echo "=== [ALPINE] Configure Toolchain ==="
