@@ -14,7 +14,7 @@ env:
 
 jobs:
   build-native-nuclear:
-    # Note: Ensure you have access to ARM runners. If not, use 'ubuntu-22.04' (x64)
+    # Menggunakan ubuntu-22.04 standar (x64) karena lebih stabil di GitHub Actions free tier
     runs-on: ubuntu-22.04
     timeout-minutes: 360
     strategy:
@@ -37,7 +37,7 @@ jobs:
           path: .build/tarballs
           restore-keys: tarballs-${{ env.CROSSTOOL_NG_VERSION }}
 
-      - name: 2. Buat Script Build (Nuclear Static - Fixed)
+      - name: 2. Buat Script Build (Nuclear Static - Fixed Arch)
         run: |
           cat > build_script.sh << 'EOF'
           #!/bin/sh
@@ -111,8 +111,13 @@ jobs:
           CT_PARALLEL_JOBS=$(nproc)
           CT_USE_PIPES=y
           CT_LOAD=""
+          
+          # --- FIX: CT_ARCH MUST BE DEFINED ---
+          CT_ARCH="xtensa"
           CT_ARCH_XTENSA=y
           CT_ARCH_XTENSA_CORE="${CORE}"
+          CT_ARCH_SUFFIX=""
+          
           CT_TARGET_VENDOR="${VENDOR}"
           CT_TARGET_SYS="elf"
           CT_KERNEL="none"
@@ -189,11 +194,14 @@ jobs:
           CT_PARALLEL_JOBS=$(nproc)
           CT_USE_PIPES=y
           CT_LOAD=""
+          
+          # RISC-V Config
+          CT_ARCH="riscv"
           CT_ARCH_RISCV=y
           CT_ARCH_64=n
-          CT_ARCH="riscv"
           CT_ARCH_FLOAT_ABI=""
           CT_ARCH_SUFFIX="32"
+          
           CT_TARGET_VENDOR="${VENDOR}"
           CT_TARGET_SYS="elf"
           CT_KERNEL="none"
