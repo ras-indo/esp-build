@@ -1,4 +1,4 @@
-name: Build All ESP32 Toolchains (Final Ultimate Fix)
+name: Build All ESP32 Toolchains (Final V7 - Alpine Fix)
 
 on:
   push:
@@ -47,7 +47,7 @@ jobs:
           gh release delete "$TAG" --yes --cleanup-tag || true
           gh release create "$TAG" \
             --title "ESP32 Toolchains (Android Native) - $TAG" \
-            --notes "Build Ultimate (Fake Rsync). Support: ESP32, S2, S3, C3, C6, H2. Static Musl." \
+            --notes "Build Ultimate V7. Support: ESP32, S2, S3, C3, C6, H2. Static Musl." \
             --draft=false \
             --prerelease=false
 
@@ -72,8 +72,9 @@ jobs:
 
       - name: Generate Build Script
         run: |
+          # PERBAIKAN 1: Gunakan /bin/sh untuk script utama
           cat > build_script.sh << 'EOF'
-          #!/bin/bash
+          #!/bin/sh
           set -e
           
           # Config
@@ -83,7 +84,7 @@ jobs:
           
           echo "=== [ALPINE] Building: $TARGET_ARCH ==="
           
-          # 1. Install Dependencies
+          # 1. Install Dependencies (Termasuk BASH untuk fake rsync nanti)
           apk update
           apk add --no-cache \
             build-base git bash autoconf automake bison flex texinfo \
@@ -97,8 +98,8 @@ jobs:
           git config --global --add safe.directory '*'
 
           # --- TEKNIK SABOTASE RSYNC (PENTING!) ---
-          # Crosstool-NG menggunakan rsync untuk copy overlay, tapi sering gagal di Alpine.
-          # Kita buat 'fake rsync' yang sebenarnya adalah 'cp'.
+          # Kita buat 'fake rsync' menggunakan BASH (karena butuh fitur array slicing)
+          # Bash sudah diinstall di langkah atas, jadi aman.
           
           echo "Creating Fake Rsync..."
           cat > /usr/bin/rsync << 'REOF'
@@ -207,13 +208,14 @@ jobs:
 
       - name: Run Build in Docker (Alpine 3.18)
         run: |
+          # PERBAIKAN 2: Gunakan /bin/sh untuk memanggil script (Alpine default)
           docker run --rm --privileged \
             -v "${{ github.workspace }}:/workspace" \
             -w "/workspace" \
             -e TARGET_ARG="${{ matrix.target }}" \
             -e VERSION_ARG="${{ env.CROSSTOOL_NG_VERSION }}" \
             alpine:3.18 \
-            /bin/bash /workspace/build_script.sh
+            /bin/sh /workspace/build_script.sh
 
       - name: Upload to Release
         env:
