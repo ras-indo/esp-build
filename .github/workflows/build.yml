@@ -1,3 +1,4 @@
+
 name: Build ESP32 All Variants Native Android (V4 - Total Static)
 
 on:
@@ -22,7 +23,7 @@ jobs:
           - { name: 'xtensa-esp32-elf', arch: 'xtensa', vendor: 'esp32', core: 'esp32', overlay: 'esp32' }
           - { name: 'xtensa-esp32s2-elf', arch: 'xtensa', vendor: 'esp32s2', core: 'esp32s2', overlay: 'esp32s2' }
           - { name: 'xtensa-esp32s3-elf', arch: 'xtensa', vendor: 'esp32s3', core: 'esp32s3', overlay: 'esp32s3' }
-          - { name: 'riscv32-esp-elf', arch: 'riscv', vendor: 'esp', core: '', overlay: 'esp32' }  # RISC-V no core, default overlay
+          - { name: 'riscv32-esp-elf', arch: 'riscv', vendor: 'esp', core: '', overlay: 'esp32' }
 
     steps:
       - name: 1. Checkout Repository
@@ -35,7 +36,7 @@ jobs:
           path: .build/tarballs
           restore-keys: tarballs-${{ env.CROSSTOOL_NG_VERSION }}
 
-      - name: 2. Buat Script Build (Nuclear Static)
+      - name: 2. Buat Script Build (Nuclear Static - Fixed)
         run: |
           cat > build_script.sh << 'EOF'
           #!/bin/sh
@@ -85,54 +86,109 @@ jobs:
 
           echo "=== [ALPINE] Configure Toolchain ==="
           cd crosstool-NG
-          ./ct-ng $TARGET
-
+          
+          # Gunakan ct-ng defconfig terlebih dahulu, lalu konfigurasi manual
+          ./ct-ng defconfig
+          
           # Reset config
-          sed -i '/CT_PREFIX_DIR/d' .config
-          sed -i '/CT_LOCAL_TARBALLS_DIR/d' .config
-          sed -i '/CT_LOG_PROGRESS_BAR/d' .config
-          sed -i '/CT_STATIC_TOOLCHAIN/d' .config
-          sed -i '/CT_WANTS_STATIC_LINK/d' .config
-          sed -i '/CT_CC_CX_LDFLAGS/d' .config
-          sed -i '/CT_LDFLAGS_FOR_HOST/d' .config
-
-          # Inject Config Static (Super Strict)
-          cat >> .config <<CONFIG_EOF
-          CT_PREFIX_DIR="${ROOT_DIR}/x-tools/${TARGET}"
-          CT_LOCAL_TARBALLS_DIR="${ROOT_DIR}/.build/tarballs"
+          > .config  # Kosongkan config terlebih dahulu
+          
+          # Build configuration dari nol
+          cat > .config <<CONFIG_EOF
+          CT_OBSOLETE=y
+          CT_EXPERIMENTAL=y
           CT_ALLOW_BUILD_AS_ROOT=y
           CT_ALLOW_BUILD_AS_ROOT_SURE=y
-          CT_EXPERIMENTAL=y
           CT_LOG_PROGRESS_BAR=n
+          CT_LOG_LEVEL_MAX=INFO
+          CT_LOCAL_TARBALLS_DIR="${ROOT_DIR}/.build/tarballs"
+          CT_PREFIX_DIR="${ROOT_DIR}/x-tools/${TARGET}"
           CT_PARALLEL_JOBS=$(nproc)
+          CT_USE_PIPES=y
+          CT_LOAD=""
+          
+          # Architecture settings
           CT_ARCH="${ARCH}"
+          $(if [ "${ARCH}" = "riscv" ]; then echo "CT_ARCH_ARCH=\"rv32imafdc\""; echo "CT_ARCH_ABI=\"ilp32\""; echo "CT_ARCH_SUFFIX=\"32\""; fi)
+          $(if [ "${ARCH}" = "xtensa" ]; then echo "CT_ARCH_XTENSA_CORE=\"${CORE}\""; fi)
+          
+          CT_TARGET="${TARGET}"
           CT_TARGET_VENDOR="${VENDOR}"
+          CT_TARGET_SYS="elf"
+          
+          # Toolchain settings
+          CT_TOOLCHAIN_PKGVERSION="esp-15.2.0_20251204"
+          CT_TOOLCHAIN_BUGURL="https://github.com/espressif/crosstool-NG"
+          
+          # Overlay settings
           CT_OVERLAY_NAME="${OVERLAY}"
           CT_OVERLAY_LOCATION="${ROOT_DIR}/crosstool-NG/overlays"
+          CT_OVERLAY_FILES=""
           
-          # Xtensa-specific if applicable
-          $(if [ -n "${CORE}" ]; then echo "CT_ARCH_XTENSA_CORE=\"${CORE}\""; fi)
+          # Binutils
+          CT_BINUTILS="y"
+          CT_BINUTILS_VERSION="2.41"
+          CT_BINUTILS_2_42_or_later=n
           
-          # RISC-V specific
-          $(if [ "${ARCH}" = "riscv" ]; then echo "CT_ARCH_SUFFIX=\"32\""; fi)
+          # GCC
+          CT_GCC="y"
+          CT_GCC_VERSION="15.2.0"
+          CT_CC_LANG_CXX=y
+          CT_CC_GCC_LIBQUADMATH=n
+          CT_CC_GCC_LIBSSP=n
+          CT_CC_GCC_LIBGOMP=n
+          CT_CC_GCC_LIBITM=n
           
-          # STATIC CONFIGURATION
-          CT_STATIC_TOOLCHAIN=y
-          CT_WANTS_STATIC_LINK=y
+          # C Library - gunakan newlib untuk embedded
+          CT_LIBC="newlib"
+          CT_LIBC_VERSION="4.3.0.20230120"
+          CT_LIBC_NEWLIB_TARGET_CFLAGS="-Os"
+          CT_LIBC_NEWLIB_NANO_FORMATTED_IO=n
           
-          # Paksa flag static di level config CT-NG juga
-          CT_CC_CX_LDFLAGS="-static"
-          CT_LDFLAGS_FOR_HOST="-static"
-          
-          CT_STRIP_HOST_TOOLCHAIN_EXECUTABLES=y
-          
-          # NO PYTHON
+          # GDB
+          CT_GDB="y"
+          CT_GDB_VERSION="13.2"
           CT_GDB_CROSS_PYTHON=n
           CT_GDB_CROSS_PYTHON_BINARY=""
+          
+          # Companion libraries
+          CT_MPFR="y"
+          CT_MPFR_VERSION="4.2.1"
+          CT_GMP="y"
+          CT_GMP_VERSION="6.3.0"
+          CT_MPC="y"
+          CT_MPC_VERSION="1.3.1"
+          CT_ISL="y"
+          CT_ISL_VERSION="0.19"
+          
+          # STATIC CONFIGURATION - SUPER STRICT
+          CT_STATIC_TOOLCHAIN=y
+          CT_WANTS_STATIC_LINK=y
+          CT_CC_CX_LDFLAGS="-static -Wl,-Bstatic"
+          CT_LDFLAGS_FOR_HOST="-static -Wl,-Bstatic"
+          CT_STRIP_HOST_TOOLCHAIN_EXECUTABLES=y
+          CT_CC_STATIC_LIBSTDCXX=y
+          CT_CC_STATIC_LIBGCC=y
+          
+          # Debug options
+          CT_DEBUG_GDB=y
+          CT_DEBUG_DUMA=n
+          CT_DEBUG_LTRACE=n
+          CT_DEBUG_STRACE=n
+          
+          # Other settings
+          CT_CC_GCC_USE_LTO=n
+          CT_CC_GCC_USE_GRAPHITE=n
+          CT_LIBC_SUPPORT_NLS=n
           CT_KERNEL="none"
           CONFIG_EOF
 
+          # Jalankan oldconfig
           yes "" | ./ct-ng oldconfig
+          
+          echo "=== [ALPINE] Validasi Konfigurasi ==="
+          grep "CT_TARGET=" .config
+          grep "CT_ARCH=" .config
 
           echo "=== [ALPINE] Building... ==="
           # Unset global flags to avoid CT-NG abort
@@ -142,7 +198,7 @@ jobs:
           
           export CT_ALLOW_BUILD_AS_ROOT=y
           export CT_ALLOW_BUILD_AS_ROOT_SURE=y
-          ./ct-ng build
+          ./ct-ng build.$(nproc)
           
           echo "=== [ALPINE] Validasi Deep (Cek cc1) ==="
           BIN_DIR="${ROOT_DIR}/x-tools/${TARGET}"
