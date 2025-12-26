@@ -190,7 +190,7 @@ jobs:
             -e TARGET_ARG="${{ matrix.target }}" \
             -e VERSION_ARG="${{ env.CROSSTOOL_NG_VERSION }}" \
             alpine:3.18 \
-            /bin/bash /workspace/build_script.sh
+            /bin/sh -c "apk update && apk add --no-cache bash && /bin/bash /workspace/build_script.sh"
 
       - name: Upload to Release
         env:
