@@ -47,7 +47,7 @@ jobs:
           gh release delete "$TAG" --yes --cleanup-tag || true
           gh release create "$TAG" \
             --title "ESP32 Toolchains (Android Native) - $TAG" \
-            --notes "Build Ultimate V7. Support: ESP32, S2, S3, C3, C6, H2. Static Musl. (Fixed Rsync Issue)" \
+            --notes "Build Ultimate V7. Support: ESP32, S2, S3, C3, C6, H2. Static Musl. (Alpine Bash Fix)" \
             --draft=false \
             --prerelease=false
 
@@ -73,7 +73,7 @@ jobs:
       - name: Generate Build Script
         run: |
           cat > build_script.sh << 'EOF'
-          #!/bin/sh
+          #!/bin/bash
           set -e
           
           # Config
@@ -84,7 +84,7 @@ jobs:
           echo "=== [ALPINE] Building: $TARGET_ARCH ==="
           
           # 1. Install Dependencies
-          # PERBAIKAN: Menambahkan 'rsync', 'zip', 'sed' asli agar kompatibel dengan script build Espressif
+          # PERBAIKAN: Menambahkan 'grep' (GNU grep) dan memaksa link bash
           apk update
           apk add --no-cache \
             build-base git bash autoconf automake bison flex texinfo \
@@ -93,8 +93,14 @@ jobs:
             expat-dev expat-static zlib-dev zlib-static \
             linux-headers gettext-dev gettext-static \
             gnu-libiconv-dev mpfr-dev gmp-dev mpc1-dev \
-            rsync zip sed
+            rsync zip sed grep
 
+          # PERBAIKAN CRITICAL: Paksa /bin/sh menggunakan bash.
+          # Banyak script internal Crosstool-NG menggunakan fitur bash (seperti pushd/popd)
+          # tetapi shebang-nya /bin/sh. Di Alpine, /bin/sh itu ash (yang gagal).
+          rm -f /bin/sh
+          ln -s /bin/bash /bin/sh
+          
           ln -sf /usr/bin/python3 /usr/bin/python
           git config --global --add safe.directory '*'
 
@@ -106,25 +112,16 @@ jobs:
           cd crosstool-NG
           git submodule update --init --recursive
           
-          # --- STRATEGI BRUTE FORCE OVERLAY ---
-          # Copy folder ke semua kemungkinan nama agar pasti ketemu
-          cd overlays
-          echo "Applying Overlay Duplication..."
-          for chip in esp32 esp32s2 esp32s3; do
-             ORIGIN="xtensa_$chip"
-             if [ -d "$ORIGIN" ]; then
-                cp -r "$ORIGIN" "xtensa_$ORIGIN"
-                cp -r "$ORIGIN" "$chip"
-             fi
-          done
-          cd ..
+          # PERBAIKAN: Hapus Brute Force Overlay.
+          # Struktur folder Espressif standar (xtensa_esp32) sudah benar.
+          # Menduplikasi folder overlay seringkali merusak symlink dan membingungkan rsync.
           
           ./bootstrap
           ./configure --enable-local --prefix=/usr/local
           make -j$(nproc)
           make install
           
-          # 3. Configure Target (Load Sample)
+          # 3. Configure Target
           ./ct-ng $TARGET_ARCH
           
           # Clean Configs
@@ -141,7 +138,6 @@ jobs:
           cat >> .config <<CONFIG_EOF
           CT_PREFIX_DIR="${ROOT_DIR}/x-tools/${TARGET_ARCH}"
           CT_LOCAL_TARBALLS_DIR="${ROOT_DIR}/.build/tarballs"
-          # Arahkan ke folder overlay yang sudah kita brute-force isinya
           CT_OVERLAY_LOCATION="${ROOT_DIR}/crosstool-NG/overlays"
           
           # Static Build Settings
@@ -158,7 +154,7 @@ jobs:
           CT_LOG_PROGRESS_BAR=n
           CT_PARALLEL_JOBS=$(nproc)
           
-          # Disable Python
+          # Disable Python (GDB with Python static linking is problematic on Alpine)
           CT_GDB_CROSS_PYTHON=n
           CT_GDB_CROSS_PYTHON_BINARY=""
           CT_KERNEL="none"
