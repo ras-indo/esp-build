@@ -1,4 +1,5 @@
-name: Build All ESP32 Toolchains (Symlink Hack Fix)
+
+name: Build All ESP32 Toolchains (Final Robust)
 
 on:
   push:
@@ -47,7 +48,7 @@ jobs:
           gh release delete "$TAG" --yes --cleanup-tag || true
           gh release create "$TAG" \
             --title "ESP32 Toolchains (Android Native) - $TAG" \
-            --notes "Build Ultimate (Symlink Hack). Support: ESP32, S2, S3, C3, C6, H2. Static Musl (No Proot)." \
+            --notes "Build Robust (Copy Overlay). Support: ESP32, S2, S3, C3, C6, H2. Static Musl (No Proot)." \
             --draft=false \
             --prerelease=false
 
@@ -104,21 +105,29 @@ jobs:
           cd crosstool-NG
           git submodule update --init --recursive
           
-          # --- THE SYMLINK HACK (SOLUSI AJAIB) ---
-          # Ini mengatasi masalah "Overlay not found" apapun logikanya.
-          # Kita buat symlink agar 'xtensa_xtensa_esp32' mengarah ke 'xtensa_esp32' yang asli.
-          # Kita juga handle untuk S2 dan S3.
+          # --- STRATEGI BRUTE FORCE OVERLAY ---
+          # Kita copy folder overlay asli ke semua kemungkinan nama.
+          # Ini menjamin path 'newlib' ditemukan oleh rsync.
           
           cd overlays
-          echo "Applying Symlink Hack for Overlays..."
-          ln -s xtensa_esp32 xtensa_xtensa_esp32 || true
-          ln -s xtensa_esp32s2 xtensa_xtensa_esp32s2 || true
-          ln -s xtensa_esp32s3 xtensa_xtensa_esp32s3 || true
+          echo "Applying Overlay Patch (Copy Strategy)..."
           
-          # Just in case logicnya minta 'esp32' saja
-          ln -s xtensa_esp32 esp32 || true
-          ln -s xtensa_esp32s2 esp32s2 || true
-          ln -s xtensa_esp32s3 esp32s3 || true
+          for chip in esp32 esp32s2 esp32s3; do
+             # Folder Asli: xtensa_$chip (contoh: xtensa_esp32)
+             ORIGIN="xtensa_$chip"
+             
+             if [ -d "$ORIGIN" ]; then
+                echo "Patching $ORIGIN..."
+                
+                # 1. Copy ke nama double (xtensa_xtensa_esp32)
+                # Kasus jika config="xtensa_esp32" dan sistem nambah prefix "xtensa_"
+                cp -r "$ORIGIN" "xtensa_$ORIGIN"
+                
+                # 2. Copy ke nama polos (esp32)
+                # Kasus jika config="esp32" dan sistem TIDAK nambah prefix
+                cp -r "$ORIGIN" "$chip"
+             fi
+          done
           
           ls -la
           cd ..
@@ -132,8 +141,7 @@ jobs:
           # 3. Configure Target (Load Sample)
           ./ct-ng $TARGET_ARCH
           
-          # Clean Configs (Hapus path & opsi build, TAPI JANGAN NAMA OVERLAY)
-          # Biarkan sample config menentukan nama overlay-nya.
+          # Clean Configs
           sed -i '/CT_PREFIX_DIR/d' .config
           sed -i '/CT_LOCAL_TARBALLS_DIR/d' .config
           sed -i '/CT_OVERLAY_LOCATION/d' .config
@@ -143,14 +151,13 @@ jobs:
           sed -i '/CT_CC_CX_LDFLAGS/d' .config
           sed -i '/CT_LDFLAGS_FOR_HOST/d' .config
 
-          # Inject Config (Override Path & Force Static)
+          # Inject Config
           cat >> .config <<CONFIG_EOF
           # Paths Override
           CT_PREFIX_DIR="${ROOT_DIR}/x-tools/${TARGET_ARCH}"
           CT_LOCAL_TARBALLS_DIR="${ROOT_DIR}/.build/tarballs"
-          
-          # Arahkan lokasi overlay ke folder yang sudah kita hack isinya tadi
-          CT_OVERLAY_LOCATION="${ROOT_DIR}/crosstool-NG/overlays" 
+          # Lokasi overlay di dalam workspace saat ini
+          CT_OVERLAY_LOCATION="${ROOT_DIR}/crosstool-NG/overlays"
           
           # Static Build Settings
           CT_STATIC_TOOLCHAIN=y
@@ -179,6 +186,7 @@ jobs:
           export CT_ALLOW_BUILD_AS_ROOT=y
           export CT_ALLOW_BUILD_AS_ROOT_SURE=y
           
+          # Bersihkan environment variable yang bisa mengganggu
           unset CFLAGS CXXFLAGS LDFLAGS
           
           ./ct-ng build
@@ -186,7 +194,8 @@ jobs:
           # 5. Packaging
           cd $ROOT_DIR/x-tools
           TAR_NAME="${TARGET_ARCH}-android-native.tar.gz"
-          # Hard Dereference: Fix 0-byte files on Android
+          
+          # Hard Dereference: Wajib untuk Android agar tidak ada file 0-byte
           tar --hard-dereference -czf $ROOT_DIR/artifacts/$TAR_NAME ${TARGET_ARCH}
           
           # Checksum
