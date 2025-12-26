@@ -1,4 +1,4 @@
-name: Build All ESP32 Toolchains (Final V7 - Alpine Fix)
+name: Build All ESP32 Toolchains (Final V7 - Hybrid Fix)
 
 on:
   push:
@@ -47,7 +47,7 @@ jobs:
           gh release delete "$TAG" --yes --cleanup-tag || true
           gh release create "$TAG" \
             --title "ESP32 Toolchains (Android Native) - $TAG" \
-            --notes "Build Ultimate V7. Support: ESP32, S2, S3, C3, C6, H2. Static Musl. (Alpine Bash Fix)" \
+            --notes "Build Ultimate V7 Hybrid. Support: ESP32, S2, S3, C3, C6, H2. Static Musl. Fixed 0-byte issue." \
             --draft=false \
             --prerelease=false
 
@@ -83,21 +83,21 @@ jobs:
           
           echo "=== [ALPINE] Building: $TARGET_ARCH ==="
           
-          # 1. Install Dependencies
-          # PERBAIKAN: Menambahkan 'grep' (GNU grep) dan memaksa link bash
+          # 1. Install Dependencies (Gabungan Script Lama & Baru)
           apk update
+          # PENTING: 'tar' harus diinstall agar dapat GNU Tar (support --hard-dereference)
+          # 'rsync' dibutuhkan oleh ct-ng versi baru
+          # 'bash' dibutuhkan untuk skrip internal ct-ng
           apk add --no-cache \
             build-base git bash autoconf automake bison flex texinfo \
             gawk libtool ncurses-dev ncurses-static python3-dev \
-            unzip wget bzip2 xz help2man file patch tar \
+            unzip wget bzip2 xz help2man file patch \
             expat-dev expat-static zlib-dev zlib-static \
             linux-headers gettext-dev gettext-static \
             gnu-libiconv-dev mpfr-dev gmp-dev mpc1-dev \
-            rsync zip sed grep
+            rsync zip sed grep tar
 
-          # PERBAIKAN CRITICAL: Paksa /bin/sh menggunakan bash.
-          # Banyak script internal Crosstool-NG menggunakan fitur bash (seperti pushd/popd)
-          # tetapi shebang-nya /bin/sh. Di Alpine, /bin/sh itu ash (yang gagal).
+          # FIX CRITICAL: Link /bin/sh ke bash agar skrip internal ct-ng berjalan lancar
           rm -f /bin/sh
           ln -s /bin/bash /bin/sh
           
@@ -108,23 +108,20 @@ jobs:
           mkdir -p $ROOT_DIR/x-tools $ROOT_DIR/artifacts $ROOT_DIR/.build/tarballs
           cd $ROOT_DIR
           
+          echo "Cloning Crosstool-NG ($CT_VERSION)..."
           git clone https://github.com/espressif/crosstool-NG.git -b $CT_VERSION crosstool-NG
           cd crosstool-NG
           git submodule update --init --recursive
-          
-          # PERBAIKAN: Hapus Brute Force Overlay.
-          # Struktur folder Espressif standar (xtensa_esp32) sudah benar.
-          # Menduplikasi folder overlay seringkali merusak symlink dan membingungkan rsync.
           
           ./bootstrap
           ./configure --enable-local --prefix=/usr/local
           make -j$(nproc)
           make install
           
-          # 3. Configure Target
+          # 3. Configure Target (Load Sample)
           ./ct-ng $TARGET_ARCH
           
-          # Clean Configs
+          # Clean Configs (Hapus path hardcoded dari sample)
           sed -i '/CT_PREFIX_DIR/d' .config
           sed -i '/CT_LOCAL_TARBALLS_DIR/d' .config
           sed -i '/CT_OVERLAY_LOCATION/d' .config
@@ -138,9 +135,10 @@ jobs:
           cat >> .config <<CONFIG_EOF
           CT_PREFIX_DIR="${ROOT_DIR}/x-tools/${TARGET_ARCH}"
           CT_LOCAL_TARBALLS_DIR="${ROOT_DIR}/.build/tarballs"
+          # Versi baru ESP-IDF ct-ng butuh path overlay yang tepat
           CT_OVERLAY_LOCATION="${ROOT_DIR}/crosstool-NG/overlays"
           
-          # Static Build Settings
+          # Static Build Settings (Agar jalan di Android/Termux)
           CT_STATIC_TOOLCHAIN=y
           CT_WANTS_STATIC_LINK=y
           CT_CC_CX_LDFLAGS="-static"
@@ -154,7 +152,7 @@ jobs:
           CT_LOG_PROGRESS_BAR=n
           CT_PARALLEL_JOBS=$(nproc)
           
-          # Disable Python (GDB with Python static linking is problematic on Alpine)
+          # Disable Python (Menghindari masalah linking python di static build)
           CT_GDB_CROSS_PYTHON=n
           CT_GDB_CROSS_PYTHON_BINARY=""
           CT_KERNEL="none"
@@ -170,9 +168,12 @@ jobs:
           
           ./ct-ng build
           
-          # 5. Packaging
+          # 5. Packaging (FIX 0-BYTE FILES)
           cd $ROOT_DIR/x-tools
           TAR_NAME="${TARGET_ARCH}-android-native.tar.gz"
+          
+          echo "Packaging $TAR_NAME with hard-dereference..."
+          # Menggunakan GNU tar untuk mengubah hardlink menjadi file fisik
           tar --hard-dereference -czf $ROOT_DIR/artifacts/$TAR_NAME ${TARGET_ARCH}
           
           cd $ROOT_DIR/artifacts
@@ -189,7 +190,7 @@ jobs:
             -e TARGET_ARG="${{ matrix.target }}" \
             -e VERSION_ARG="${{ env.CROSSTOOL_NG_VERSION }}" \
             alpine:3.18 \
-            /bin/sh /workspace/build_script.sh
+            /bin/bash /workspace/build_script.sh
 
       - name: Upload to Release
         env:
