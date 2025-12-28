@@ -1,230 +1,289 @@
-name: Viral Video Editor CI/CD
+name: Viral Video Automation
 
 on:
+  push:
+    branches: [ "main" ]
   workflow_dispatch:
-    inputs:
-      youtube_url:
-        description: 'YouTube URL'
-        required: true
-        default: 'https://youtu.be/wn717YmB1z0' # Contoh default
-      api_key:
-        description: 'API Key (OpenAI)'
-        required: true
-        default: ''
 
 jobs:
-  process-video:
+  video-editor:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v3
-    
-    # SETUP NODE.JS (PENTING untuk yt-dlp menangani signature/challenge)
-    - name: Setup Node.js
-      uses: actions/setup-node@v3
-      with:
-        node-version: '20'
-    
-    - name: Setup Python
-      uses: actions/setup-python@v4
+    # 1. Setup Environment
+    - name: Checkout repo
+      uses: actions/checkout@v4
+
+    - name: Set up Python 3.10
+      uses: actions/setup-python@v5
       with:
         python-version: '3.10'
-    
-    - name: Install Dependencies
+
+    - name: Install System Deps (FFmpeg)
       run: |
         sudo apt-get update
         sudo apt-get install -y ffmpeg
-        # Install yt-dlp versi paling baru (wajib upgrade)
-        pip install --upgrade yt-dlp faster-whisper numpy openai tqdm torch
-        echo "✅ Dependencies installed"
-    
-    - name: Run Video Editor Script
-      env:
-        API_KEY: ${{ github.event.inputs.api_key }}
-        YOUTUBE_URL: ${{ github.event.inputs.youtube_url }}
+
+    # 2. Install Python Libraries
+    - name: Install Python Packages
       run: |
-        # Create output directory
-        mkdir -p output
-        
-        # WRITE PYTHON SCRIPT
-        cat > video_editor.py << 'EOF'
-        import os, sys, subprocess, json, time
+        pip install yt-dlp faster-whisper numpy openai tqdm torch
+
+    # 3. Generate & Run Script
+    - name: Run Video Editor
+      run: |
+        cat << 'EOF' > main.py
+        import os, sys, subprocess, json, time, re
         from pathlib import Path
+
+        print("=" * 60)
+        print("VIRAL VIDEO EDITOR - GITHUB ACTIONS VERSION")
+        print("=" * 60)
+
         import torch
         from openai import OpenAI
-        from faster_whisper import WhisperModel
-        
-        print("=" * 60)
-        print("VIRAL VIDEO EDITOR - SMART DOWNLOADER EDITION")
-        print("=" * 60)
-        
+        from tqdm import tqdm
+        import numpy as np
+
         # ----------------------------
-        # 1. SETUP & CONFIG
+        # CONFIGURATION
         # ----------------------------
-        RAW_URL = os.getenv("YOUTUBE_URL", "").strip()
-        API_KEY = os.getenv("API_KEY", "").strip()
+        # URL VIDEO
+        YOUTUBE_URL = "https://nsf-m4c-one-fr-03.sf-converter.com/prod-new/download/eyJtZWRpYUlkIjoiVEdFdi1IMkRZdUkiLCJ0aXRsZSI6Ik1vbWVuIEtldGlrYSBQdXRpbiBNZW51bWJhbmdrYW4gT3JhbmcgVGVya2F5YSBkaSBSdXNpYSBEYWxhbSBTZWtlamFwISIsImZvcm1hdCI6Im1wNCIsInF1YWxpdHkiOiI3MjAiLCJ0aW1lc3RhbXAiOjE3NjY5MjE1Mzh9.ea87b7c602174bd66e8876df674ceaf8"
         
-        if not RAW_URL:
-            print("❌ Error: URL Kosong!")
+        API_KEY = "Kontolondon" 
+        API_BASE = "https://tes-coral.vercel.app/v1/"
+        WHISPER_MODEL_NAME = "medium"
+
+        # --- SETUP DIRECTORIES (Relative Paths) ---
+        # Menggunakan current working directory (project root)
+        BASE_DIR = Path.cwd()
+        OUTPUT_DIR = BASE_DIR / "output"
+        MODELS_DIR = BASE_DIR / "models"
+        
+        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        MODELS_DIR.mkdir(parents=True, exist_ok=True)
+
+        AUDIO_PATH = BASE_DIR / "audio.wav"
+        VIDEO_PATH = BASE_DIR / "video.mp4"
+        ZIP_OUTPUT_PATH = BASE_DIR / "viral_segments.zip"
+
+        print(f"📂 Working Directory: {BASE_DIR}")
+        print(f"📂 Output Directory: {OUTPUT_DIR}")
+
+        # ----------------------------
+        # INITIALIZE OPENAI CLIENT
+        # ----------------------------
+        try:
+            openai_client = OpenAI(api_key=API_KEY, base_url=API_BASE)
+            print("✅ OpenAI client initialized")
+        except Exception as e:
+            print(f"❌ Failed to initialize OpenAI client: {e}")
             sys.exit(1)
 
         # ----------------------------
-        # 2. URL CLEANING (FIXED)
+        # UTILITY FUNCTIONS
         # ----------------------------
-        # Logic: Ambil bagian sebelum tanda tanya '?' untuk membuang ?si=...
-        # Dan juga split '&' jaga-jaga format lama
-        CLEAN_URL = RAW_URL.split('?')[0].split('&')[0]
-        
-        print(f"🔗 Raw URL   : {RAW_URL}")
-        print(f"✨ Clean URL : {CLEAN_URL}")
-        
-        OUTPUT_DIR = Path("./output")
-        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
-        # ----------------------------
-        # 3. SMART DOWNLOADER (RETRY LOGIC)
-        # ----------------------------
-        def download_with_retry(url, output_path="./video.mp4"):
-            print(f"\n📥 DOWNLOADING VIDEO...")
-            
-            # Daftar strategi klien untuk mengelabui deteksi bot
-            strategies = [
-                {
-                    "name": "Android Client (Mobile Spoofing)",
-                    "args": ["--extractor-args", "youtube:player_client=android", "--user-agent", "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Mobile Safari/537.36"]
-                },
-                {
-                    "name": "iOS Client (iPhone Spoofing)",
-                    "args": ["--extractor-args", "youtube:player_client=ios"]
-                },
-                {
-                    "name": "Web Client (Standard)",
-                    "args": ["--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"]
-                }
-            ]
-            
-            for strategy in strategies:
-                print(f"   🔄 Trying strategy: {strategy['name']}...")
-                
+        def download_youtube(url: str, output_path) -> Path:
+            """Download video"""
+            print(f"\n📥 DOWNLOADING VIDEO")
+            clean_url = url.split('?')[0]
+            try:
                 cmd = [
                     "yt-dlp",
-                    "-f", "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4] / bv*+ba/b",
-                    "--force-overwrites",
-                    "--no-playlist",
-                    "-o", output_path
-                ] + strategy['args'] + [url]
-                
-                try:
-                    # Jalankan download
-                    result = subprocess.run(cmd, capture_output=True, text=True)
-                    
-                    # Cek keberhasilan
-                    if result.returncode == 0 and Path(output_path).exists() and Path(output_path).stat().st_size > 1000:
-                        size = Path(output_path).stat().st_size / (1024 * 1024)
-                        print(f"   ✅ SUCCESS! Downloaded ({size:.1f} MB)")
-                        return Path(output_path)
-                    else:
-                        print(f"   ⚠️ Strategy failed. Error snippet: {result.stderr[:200]}...")
-                        time.sleep(2) # Istirahat sebentar sebelum retry
-                        continue
-                        
-                except Exception as e:
-                    print(f"   ⚠️ Exception: {e}")
-                    continue
-            
-            # Jika semua strategi gagal
-            raise Exception("❌ All download strategies failed! YouTube is blocking the IP.")
-
-        # ----------------------------
-        # 4. PROCESSING PIPELINE
-        # ----------------------------
-        def process_video():
-            try:
-                # A. Download
-                video_path = download_with_retry(CLEAN_URL)
-                
-                # B. Extract Audio
-                print(f"\n🔊 EXTRACTING AUDIO...")
-                audio_path = Path("audio.wav")
-                subprocess.run([
-                    "ffmpeg", "-y", "-i", str(video_path),
-                    "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
-                    "-loglevel", "error", str(audio_path)
-                ], check=True)
-                
-                # C. Transcribe
-                print(f"\n🎙️ TRANSCRIBING...")
-                model = WhisperModel("tiny", device="cpu", compute_type="int8")
-                segments_gen, _ = model.transcribe(str(audio_path))
-                
-                segments = []
-                full_text = ""
-                for s in segments_gen:
-                    segments.append({"start": s.start, "end": s.end, "text": s.text.strip()})
-                    full_text += s.text + " "
-                
-                print(f"   ✅ Transcribed {len(segments)} segments")
-                
-                # D. GPT Analysis (Simple)
-                clips = []
-                if API_KEY:
-                    print(f"\n🧠 GPT ANALYSIS...")
-                    try:
-                        client = OpenAI(api_key=API_KEY, base_url="https://tes-coral.vercel.app/v1/")
-                        prompt = f"""Task: Find 1 interesting part (15-50s) in this text.
-                        Return JSON: [{{"start": 10, "end": 40, "title": "Viral Part"}}]
-                        Text: {full_text[:3000]}"""
-                        
-                        resp = client.chat.completions.create(
-                            model="gpt-4o", messages=[{"role": "user", "content": prompt}]
-                        )
-                        content = resp.choices[0].message.content
-                        if "```" in content: content = content.split("```")[1].replace("json", "").strip()
-                        clips = json.loads(content)
-                    except Exception as e:
-                        print(f"⚠️ GPT Error: {e}")
-                
-                # Fallback jika GPT gagal/tidak ada API
-                if not clips:
-                    print("⚠️ Using Fallback Clip (First 30s)")
-                    clips = [{"start": 0, "end": 30, "title": "Intro Highlight"}]
-                
-                # E. Cutting
-                print(f"\n✂️ CUTTING VIDEO...")
-                results = []
-                for i, clip in enumerate(clips):
-                    out_file = OUTPUT_DIR / f"clip_{i+1}.mp4"
-                    subprocess.run([
-                        "ffmpeg", "-y", "-i", str(video_path),
-                        "-ss", str(clip['start']), "-to", str(clip['end']),
-                        "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "copy",
-                        "-loglevel", "error", str(out_file)
-                    ], check=True)
-                    results.append(out_file)
-                
-                print(f"\n✅ DONE! Created {len(results)} files in ./output")
-                
-                # ZIP Results
-                import zipfile
-                with zipfile.ZipFile("viral_segments.zip", "w") as z:
-                    for f in results: z.write(f, f.name)
-
+                    "-f", "best[height<=720][ext=mp4]/best[ext=mp4]/best",
+                    "-o", str(output_path),
+                    "--quiet", "--no-warnings",
+                    clean_url
+                ]
+                subprocess.run(cmd, check=True, timeout=300)
+                if output_path.exists():
+                    print(f"   ✅ Download successful: {output_path.name}")
+                    return output_path
+                raise FileNotFoundError("Video not found after download")
             except Exception as e:
-                print(f"\n❌ FATAL ERROR: {e}")
-                sys.exit(1)
+                raise Exception(f"Download failed: {str(e)}")
+
+        def convert_video_to_audio(video_path: Path, audio_path: Path) -> Path:
+            """Convert to WAV"""
+            print(f"\n🔄 CONVERTING VIDEO TO AUDIO")
+            cmd = [
+                "ffmpeg", "-i", str(video_path), "-vn",
+                "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
+                "-y", str(audio_path)
+            ]
+            subprocess.run(cmd, check=True, stderr=subprocess.DEVNULL)
+            print(f"   ✅ Audio ready: {audio_path.name}")
+            return audio_path
+
+        def get_video_duration(path: Path) -> float:
+            try:
+                cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(path)]
+                return float(subprocess.check_output(cmd).decode().strip())
+            except: return 0
+
+        # ----------------------------
+        # TRANSCRIPTION
+        # ----------------------------
+        class FasterWhisperTranscriber:
+            def __init__(self, model_name):
+                self.model_name = model_name
+                self.model = None
+            
+            def load_model(self):
+                print(f"\n📥 LOADING MODEL (Download to {MODELS_DIR})")
+                from faster_whisper import WhisperModel
+                self.model = WhisperModel(
+                    self.model_name,
+                    device="cpu", # GitHub Actions standard runner is CPU
+                    compute_type="int8",
+                    download_root=str(MODELS_DIR)
+                )
+                return self.model
+            
+            def transcribe(self, audio_path):
+                if not self.model: self.load_model()
+                print(f"\n🎙️ TRANSCRIBING...")
+                segments_generator, info = self.model.transcribe(str(audio_path), beam_size=5)
+                
+                all_segments = []
+                full_text = ""
+                for segment in segments_generator:
+                    all_segments.append({
+                        "start": segment.start, "end": segment.end, "text": segment.text.strip()
+                    })
+                    full_text += segment.text.strip() + " "
+                
+                return {
+                    "text": full_text.strip(),
+                    "segments": all_segments,
+                    "language": info.language
+                }
+
+        # ----------------------------
+        # GPT-4 EDITOR
+        # ----------------------------
+        class GPT4VideoEditor:
+            def __init__(self, client, video_path, transcript_data):
+                self.client = client
+                self.video_path = video_path
+                self.transcript = transcript_data
+                self.duration = get_video_duration(video_path)
+            
+            def analyze(self):
+                print(f"\n🧠 ANALYZING WITH GPT-4")
+                segments = self.transcript.get("segments", [])
+                transcript_text = ""
+                for seg in segments[:50]:
+                    transcript_text += f"[{seg['start']:.1f}s - {seg['end']:.1f}s]: {seg['text']}\\n"
+                
+                system_prompt = "You are a viral video editor. Create segments UNDER 60 SECONDS based on the transcript. Return ONLY a JSON array with objects containing: start_time, end_time, title, hook, target_platform."
+                user_prompt = f"Video Duration: {self.duration}s. Analyze this transcript and find viral moments. Transcript:\\n{transcript_text}\\n\\nReturn JSON array only."
+
+                try:
+                    response = self.client.chat.completions.create(
+                        model="gpt-4",
+                        messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
+                        temperature=0.7
+                    )
+                    return response.choices[0].message.content.strip()
+                except Exception as e:
+                    print(f"❌ GPT Error: {e}")
+                    return None
+
+            def parse(self, gpt_response):
+                try:
+                    # Simple JSON extraction
+                    match = re.search(r'\[.*\]', gpt_response.strip(), re.DOTALL)
+                    if not match: return []
+                    data = json.loads(match.group(0))
+                    
+                    valid = []
+                    for i, item in enumerate(data, 1):
+                        start, end = float(item['start_time']), float(item['end_time'])
+                        if (end - start) > 60: end = start + 60 # Force max 60s
+                        item['index'] = i
+                        item['start_time'] = start
+                        item['end_time'] = end
+                        item['duration'] = end - start
+                        valid.append(item)
+                    return valid
+                except Exception as e:
+                    print(f"❌ Parse Error: {e}")
+                    return []
+
+        # ----------------------------
+        # CUTTER
+        # ----------------------------
+        def cut_video(video_path, segments, output_dir):
+            print(f"\n✂️ CUTTING {len(segments)} SEGMENTS")
+            results = []
+            for seg in segments:
+                safe_title = re.sub(r'[^\w\s-]', '', seg['title']).strip().replace(" ", "_")[:30]
+                out_name = output_dir / f"seg_{seg['index']:02d}_{safe_title}.mp4"
+                
+                cmd = [
+                    "ffmpeg", "-y", "-i", str(video_path),
+                    "-ss", str(seg['start_time']), "-to", str(seg['end_time']),
+                    "-c:v", "libx264", "-c:a", "aac",
+                    "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black",
+                    str(out_name)
+                ]
+                subprocess.run(cmd, check=False, stderr=subprocess.DEVNULL)
+                if out_name.exists():
+                    print(f"   ✅ Saved: {out_name.name}")
+                    results.append(out_name)
+            return results
+
+        # ----------------------------
+        # MAIN
+        # ----------------------------
+        def main():
+            # 1. Download
+            if not VIDEO_PATH.exists():
+                download_youtube(YOUTUBE_URL, VIDEO_PATH)
+            
+            # 2. Audio
+            convert_video_to_audio(VIDEO_PATH, AUDIO_PATH)
+            
+            # 3. Transcribe
+            transcriber = FasterWhisperTranscriber(WHISPER_MODEL_NAME)
+            res = transcriber.transcribe(AUDIO_PATH)
+            
+            # 4. Analyze
+            editor = GPT4VideoEditor(openai_client, VIDEO_PATH, res)
+            gpt_res = editor.analyze()
+            if not gpt_res: return
+            
+            segments = editor.parse(gpt_res)
+            print(f"   found {len(segments)} valid segments")
+
+            # 5. Cut
+            files = cut_video(VIDEO_PATH, segments, OUTPUT_DIR)
+            
+            # 6. Zip
+            if files:
+                import zipfile
+                print(f"\n📦 Zipping results to {ZIP_OUTPUT_PATH}...")
+                with zipfile.ZipFile(ZIP_OUTPUT_PATH, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                    for f in files:
+                        zipf.write(f, f.name)
+                print("✅ Zip created successfully")
 
         if __name__ == "__main__":
-            process_video()
+            main()
         EOF
         
-        # RUN
-        python video_editor.py
-    
-    - name: Upload Artifacts
+        # Jalankan Script
+        python main.py
+
+    # 4. Upload Hasil Output (Zip File)
+    - name: Upload Viral Segments Zip
       uses: actions/upload-artifact@v4
-      if: success()
+      if: always()
       with:
-        name: viral-video-segments
+        name: viral-video-results
         path: viral_segments.zip
-        retention-days: 3
+        retention-days: 5
