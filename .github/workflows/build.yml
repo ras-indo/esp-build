@@ -1,4 +1,3 @@
-
 name: Viral Video Automation
 
 on:
@@ -7,317 +6,176 @@ on:
   workflow_dispatch:
 
 jobs:
-  video-editor:
+  process-video:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    
+
     steps:
-    # 1. Setup Environment
-    - name: Checkout repo
-      uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-    - name: Set up Python 3.10
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.10'
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
 
-    # Tambahkan wget di sini
-    - name: Install System Deps
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y ffmpeg wget
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg wget
+          pip install faster-whisper numpy openai tqdm torch
 
-    # 2. Install Python Libraries
-    - name: Install Python Packages
-      run: |
-        pip install yt-dlp faster-whisper numpy openai tqdm torch
+      - name: Run Video Processing
+        shell: python
+        env:
+          # Masukkan URL Video di sini (Bisa diganti lewat Secrets kalau mau lebih aman)
+          VIDEO_URL: "https://api.vidssave.com/api/contentsite_api/media/download_redirect?request=sgRpmKL3iNBpyIDr4IgGHBXJiSxcf0EYQuGexs_6KdEalT5ycrs3ffYBEZXevrdUBcrNn6iDw8MfLNTFhlNy7biCIOWf4sDWWBA_S3Gc0ACg1ZPIBzwNN6iyUU-0-PuEErnV6vklMuUiHCyNARF0XKYdjAEXIFyrKF3ytFZL3SURwBQ6zqTIxoinSGmbNRzuDj7GLLN2-qE4j55wtrmuN0sRuMHC3v3eqf14UHFW6OQMmpQ5sIwzvVB6Y5OhROhLgjaA0g8XRTd1z8-rT37YaXo2Y1N59CFMiBNLYoMKlQY-ogHXajXJ3IPsDSTl679jtoOgZpQQY4lq8X-k8lRdgZ5x16iwKPU9AC5d20FwHAFwPaA6sqqj6Sulox0JtTHVQT3xcaUUJowztbrK3N1wClY_bp0pTnhFn4ntpiJhobshFeQwTW0cvTh7u-DnwrB6zF3N3uAfdG9YkBFZZfMIps_fqAN_JZe1TE8Xy6dOcm1cAkp4CQA-6VSb2h75I3aACfjLy872k1vGM7UyG_aS1MqWJUICirs_GRhll-ZswtvtiONJHwWROte6JB-8vU4YEOzzqQAnMb6vwwKFoFArv6XjRP9hX__3UF6yn8R7YYtp9bMuc53-ovjN9sdZoX02"
+          # API Key Hardcoded sesuai request (Sebaiknya pakai Secrets)
+          OPENAI_API_KEY: "Kontolondon"
+          OPENAI_BASE_URL: "https://tes-coral.vercel.app/v1/"
+        run: |
+          import os, sys, subprocess, json, re
+          from pathlib import Path
+          import torch
+          from openai import OpenAI
 
-    # 3. Generate & Run Script
-    - name: Run Video Editor
-      run: |
-        cat << 'EOF' > main.py
-        import os, sys, subprocess, json, time, re
-        from pathlib import Path
+          print("="*60)
+          print("DIRECT MEMORY EXECUTION (NO MAIN.PY)")
+          print("="*60)
 
-        print("=" * 60)
-        print("VIRAL VIDEO EDITOR - WGET VERSION")
-        print("=" * 60)
+          # --- CONFIG ---
+          VIDEO_URL = os.environ.get("VIDEO_URL")
+          API_KEY = os.environ.get("OPENAI_API_KEY")
+          API_BASE = os.environ.get("OPENAI_BASE_URL")
+          
+          BASE_DIR = Path.cwd()
+          OUTPUT_DIR = BASE_DIR / "output"
+          MODELS_DIR = BASE_DIR / "models"
+          VIDEO_PATH = BASE_DIR / "video.mp4"
+          AUDIO_PATH = BASE_DIR / "audio.wav"
+          ZIP_PATH = BASE_DIR / "viral_segments.zip"
+          
+          OUTPUT_DIR.mkdir(exist_ok=True)
+          MODELS_DIR.mkdir(exist_ok=True)
 
-        import torch
-        from openai import OpenAI
-        from tqdm import tqdm
-        import numpy as np
+          # --- 1. DOWNLOAD WITH WGET ---
+          print(f"\n📥 DOWNLOADING via WGET...")
+          try:
+              # Pake wget -O video.mp4 "URL"
+              cmd = ["wget", "-O", str(VIDEO_PATH), VIDEO_URL]
+              subprocess.run(cmd, check=True)
+              
+              if not VIDEO_PATH.exists() or VIDEO_PATH.stat().st_size < 1000:
+                  print("❌ Download gagal: File kosong/tidak ada")
+                  sys.exit(1)
+              print(f"✅ Download OK: {VIDEO_PATH.stat().st_size / (1024*1024):.2f} MB")
+          except Exception as e:
+              print(f"❌ Wget Error: {e}")
+              sys.exit(1)
 
-        # ----------------------------
-        # CONFIGURATION
-        # ----------------------------
-        # URL PANJANG DARI USER
-        VIDEO_URL = "https://api.vidssave.com/api/contentsite_api/media/download_redirect?request=sgRpmKL3iNBpyIDr4IgGHBXJiSxcf0EYQuGexs_6KdEalT5ycrs3ffYBEZXevrdUBcrNn6iDw8MfLNTFhlNy7biCIOWf4sDWWBA_S3Gc0ACg1ZPIBzwNN6iyUU-0-PuEErnV6vklMuUiHCyNARF0XKYdjAEXIFyrKF3ytFZL3SURwBQ6zqTIxoinSGmbNRzuDj7GLLN2-qE4j55wtrmuN0sRuMHC3v3eqf14UHFW6OQMmpQ5sIwzvVB6Y5OhROhLgjaA0g8XRTd1z8-rT37YaXo2Y1N59CFMiBNLYoMKlQY-ogHXajXJ3IPsDSTl679jtoOgZpQQY4lq8X-k8lRdgZ5x16iwKPU9AC5d20FwHAFwPaA6sqqj6Sulox0JtTHVQT3xcaUUJowztbrK3N1wClY_bp0pTnhFn4ntpiJhobshFeQwTW0cvTh7u-DnwrB6zF3N3uAfdG9YkBFZZfMIps_fqAN_JZe1TE8Xy6dOcm1cAkp4CQA-6VSb2h75I3aACfjLy872k1vGM7UyG_aS1MqWJUICirs_GRhll-ZswtvtiONJHwWROte6JB-8vU4YEOzzqQAnMb6vwwKFoFArv6XjRP9hX__3UF6yn8R7YYtp9bMuc53-ovjN9sdZoX02"
-        
-        API_KEY = "Kontolondon" 
-        API_BASE = "https://tes-coral.vercel.app/v1/"
-        WHISPER_MODEL_NAME = "medium"
+          # --- 2. EXTRACT AUDIO ---
+          print("\n🔄 EXTRACTING AUDIO...")
+          subprocess.run([
+              "ffmpeg", "-y", "-i", str(VIDEO_PATH), "-vn",
+              "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
+              str(AUDIO_PATH)
+          ], check=True, stderr=subprocess.DEVNULL)
 
-        # --- SETUP DIRECTORIES ---
-        BASE_DIR = Path.cwd()
-        OUTPUT_DIR = BASE_DIR / "output"
-        MODELS_DIR = BASE_DIR / "models"
-        
-        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        MODELS_DIR.mkdir(parents=True, exist_ok=True)
+          # --- 3. TRANSCRIBE ---
+          print("\n🎙️ TRANSCRIBING...")
+          from faster_whisper import WhisperModel
+          model = WhisperModel("medium", device="cpu", compute_type="int8", download_root=str(MODELS_DIR))
+          segments, info = model.transcribe(str(AUDIO_PATH), beam_size=5)
+          
+          transcript_segs = []
+          full_text = ""
+          for s in segments:
+              transcript_segs.append({"start": s.start, "end": s.end, "text": s.text.strip()})
+              full_text += s.text + " "
+          
+          print(f"✅ Transcribed {len(transcript_segs)} segments ({info.duration:.1f}s)")
 
-        AUDIO_PATH = BASE_DIR / "audio.wav"
-        VIDEO_PATH = BASE_DIR / "video.mp4"
-        ZIP_OUTPUT_PATH = BASE_DIR / "viral_segments.zip"
+          # --- 4. GPT ANALYSIS ---
+          print("\n🧠 GPT-4 ANALYSIS...")
+          client = OpenAI(api_key=API_KEY, base_url=API_BASE)
+          
+          # Context limit biar gak error token
+          txt_context = ""
+          for s in transcript_segs[:80]: 
+              txt_context += f"[{s['start']:.1f}-{s['end']:.1f}] {s['text']}\n"
+          
+          prompt = """You are a video editor. Task: Extract viral short clips (vertical format).
+          RULES:
+          1. Return JSON ARRAY ONLY.
+          2. Each segment MUST be under 60 seconds.
+          3. Timestamps must be pure numbers (e.g. 10.5), DO NOT add 's'.
 
-        print(f"📂 Working Directory: {BASE_DIR}")
-        print(f"📂 Output Directory: {OUTPUT_DIR}")
+          Format: [{"start_time": 10.0, "end_time": 30.0, "title": "Topic"}]"""
 
-        # ----------------------------
-        # INITIALIZE OPENAI CLIENT
-        # ----------------------------
-        try:
-            openai_client = OpenAI(api_key=API_KEY, base_url=API_BASE)
-            print("✅ OpenAI client initialized")
-        except Exception as e:
-            print(f"❌ Failed to initialize OpenAI client: {e}")
-            sys.exit(1)
+          try:
+              resp = client.chat.completions.create(
+                  model="gpt-4",
+                  messages=[
+                      {"role": "system", "content": prompt},
+                      {"role": "user", "content": f"Duration: {info.duration}s\nTranscript:\n{txt_context}"}
+                  ],
+                  temperature=0.7
+              )
+              gpt_content = resp.choices[0].message.content.strip()
+          except Exception as e:
+              print(f"❌ GPT Error: {e}")
+              sys.exit(1)
 
-        # ----------------------------
-        # UTILITY FUNCTIONS
-        # ----------------------------
-        def direct_download_wget(url, output_path):
-            """Download video using pure wget"""
-            print(f"\n📥 DOWNLOADING VIDEO WITH WGET")
-            print(f"   Target: {url[:50]}...")
-            
-            # Hapus file lama jika ada
-            if output_path.exists():
-                os.remove(output_path)
-                
-            try:
-                # Menggunakan User-Agent agar tidak diblokir
-                user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-                
-                cmd = [
-                    "wget", 
-                    "--user-agent", user_agent,
-                    "-O", str(output_path),
-                    url
-                ]
-                
-                # Check=True akan raise error jika wget gagal (non-zero exit code)
-                subprocess.run(cmd, check=True)
-                
-                if output_path.exists() and output_path.stat().st_size > 1000:
-                    size_mb = output_path.stat().st_size / (1024 * 1024)
-                    print(f"   ✅ Download successful: {size_mb:.2f} MB")
-                    return output_path
-                else:
-                    raise FileNotFoundError("File downloaded but empty or too small")
-                    
-            except subprocess.CalledProcessError as e:
-                print(f"   ❌ Wget failed with exit code {e.returncode}")
-                raise Exception("Download failed via wget")
-            except Exception as e:
-                print(f"   ❌ Download error: {e}")
-                raise
+          # --- 5. PARSE & CUT ---
+          def safe_float(val):
+              try: return float(str(val).lower().replace('s', '').strip())
+              except: return 0.0
 
-        def convert_video_to_audio(video_path: Path, audio_path: Path) -> Path:
-            """Convert to WAV"""
-            print(f"\n🔄 CONVERTING VIDEO TO AUDIO")
-            if not video_path.exists():
-                raise FileNotFoundError(f"Video file not found at {video_path}")
-                
-            cmd = [
-                "ffmpeg", "-i", str(video_path), "-vn",
-                "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
-                "-y", str(audio_path)
-            ]
-            subprocess.run(cmd, check=True, stderr=subprocess.DEVNULL)
-            print(f"   ✅ Audio ready: {audio_path.name}")
-            return audio_path
+          print("\n✂️ CUTTING VIDEO...")
+          match = re.search(r'\[.*\]', gpt_content, re.DOTALL)
+          if match:
+              data = json.loads(match.group(0))
+              files_created = []
+              
+              for i, item in enumerate(data, 1):
+                  start = safe_float(item.get('start_time', 0))
+                  end = safe_float(item.get('end_time', 0))
+                  
+                  if (end - start) > 60: end = start + 60
+                  if (end - start) < 2: continue
+                  
+                  safe_name = re.sub(r'[^\w\s-]', '', item.get('title', 'clip')).strip().replace(" ", "_")[:30]
+                  out_path = OUTPUT_DIR / f"clip_{i}_{safe_name}.mp4"
+                  
+                  print(f"   Processing: {start}-{end}s -> {out_path.name}")
+                  
+                  subprocess.run([
+                      "ffmpeg", "-y", "-ss", str(start), "-to", str(end),
+                      "-i", str(VIDEO_PATH),
+                      "-c:v", "libx264", "-c:a", "aac",
+                      "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black",
+                      str(out_path)
+                  ], stderr=subprocess.DEVNULL)
+                  
+                  if out_path.exists(): files_created.append(out_path)
 
-        def get_video_duration(path: Path) -> float:
-            try:
-                cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(path)]
-                return float(subprocess.check_output(cmd).decode().strip())
-            except: return 0
+              # --- 6. ZIP ---
+              if files_created:
+                  import zipfile
+                  print(f"\n📦 Zipping {len(files_created)} files...")
+                  with zipfile.ZipFile(ZIP_PATH, 'w', zipfile.ZIP_DEFLATED) as zf:
+                      for f in files_created: zf.write(f, f.name)
+                  print("✅ DONE")
+              else:
+                  print("⚠️ No valid clips generated.")
+          else:
+              print("❌ No JSON found in GPT response")
 
-        # ----------------------------
-        # TRANSCRIPTION
-        # ----------------------------
-        class FasterWhisperTranscriber:
-            def __init__(self, model_name):
-                self.model_name = model_name
-                self.model = None
-            
-            def load_model(self):
-                print(f"\n📥 LOADING MODEL (Download to {MODELS_DIR})")
-                from faster_whisper import WhisperModel
-                self.model = WhisperModel(
-                    self.model_name,
-                    device="cpu",
-                    compute_type="int8",
-                    download_root=str(MODELS_DIR)
-                )
-                return self.model
-            
-            def transcribe(self, audio_path):
-                if not self.model: self.load_model()
-                print(f"\n🎙️ TRANSCRIBING...")
-                segments_generator, info = self.model.transcribe(str(audio_path), beam_size=5)
-                
-                all_segments = []
-                full_text = ""
-                for segment in segments_generator:
-                    all_segments.append({
-                        "start": segment.start, "end": segment.end, "text": segment.text.strip()
-                    })
-                    full_text += segment.text.strip() + " "
-                
-                return {
-                    "text": full_text.strip(),
-                    "segments": all_segments,
-                    "language": info.language
-                }
-
-        # ----------------------------
-        # GPT-4 EDITOR
-        # ----------------------------
-        class GPT4VideoEditor:
-            def __init__(self, client, video_path, transcript_data):
-                self.client = client
-                self.video_path = video_path
-                self.transcript = transcript_data
-                self.duration = get_video_duration(video_path)
-            
-            def analyze(self):
-                print(f"\n🧠 ANALYZING WITH GPT-4")
-                segments = self.transcript.get("segments", [])
-                transcript_text = ""
-                for seg in segments[:50]:
-                    transcript_text += f"[{seg['start']:.1f}s - {seg['end']:.1f}s]: {seg['text']}\\n"
-                
-                # Instruction to return clean JSON
-                system_prompt = "You are a viral video editor. Create segments UNDER 60 SECONDS. Return ONLY a JSON array. Format: [{\"start_time\": 0.0, \"end_time\": 10.0, \"title\": \"...\", \"hook\": \"...\"}]"
-                user_prompt = f"Video Duration: {self.duration}s. Transcript:\\n{transcript_text}\\n\\nFind viral moments. Return JSON array only. NO text 's' in timestamps, use pure numbers."
-
-                try:
-                    response = self.client.chat.completions.create(
-                        model="gpt-4",
-                        messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
-                        temperature=0.7
-                    )
-                    return response.choices[0].message.content.strip()
-                except Exception as e:
-                    print(f"❌ GPT Error: {e}")
-                    return None
-
-            def parse(self, gpt_response):
-                try:
-                    match = re.search(r'\[.*\]', gpt_response.strip(), re.DOTALL)
-                    if not match: return []
-                    data = json.loads(match.group(0))
-                    
-                    # FUNGSI MEMBERSIHKAN FORMAT WAKTU (Mencegah error '0.0s')
-                    def clean_time(t):
-                        # Hapus semua karakter yang bukan angka atau titik
-                        clean_str = re.sub(r'[^\d.]', '', str(t))
-                        if not clean_str: return 0.0
-                        return float(clean_str)
-
-                    valid = []
-                    for i, item in enumerate(data, 1):
-                        # Gunakan clean_time di sini
-                        start = clean_time(item['start_time'])
-                        end = clean_time(item['end_time'])
-                        
-                        if (end - start) > 60: end = start + 60
-                        
-                        item['index'] = i
-                        item['start_time'] = start
-                        item['end_time'] = end
-                        item['duration'] = end - start
-                        valid.append(item)
-                    return valid
-                except Exception as e:
-                    print(f"❌ Parse Error details: {e}")
-                    print(f"❌ Raw Response: {gpt_response[:200]}...") # Print raw for debug
-                    return []
-
-        # ----------------------------
-        # CUTTER
-        # ----------------------------
-        def cut_video(video_path, segments, output_dir):
-            print(f"\n✂️ CUTTING {len(segments)} SEGMENTS")
-            results = []
-            for seg in segments:
-                safe_title = re.sub(r'[^\w\s-]', '', seg['title']).strip().replace(" ", "_")[:30]
-                out_name = output_dir / f"seg_{seg['index']:02d}_{safe_title}.mp4"
-                
-                cmd = [
-                    "ffmpeg", "-y", "-i", str(video_path),
-                    "-ss", str(seg['start_time']), "-to", str(seg['end_time']),
-                    "-c:v", "libx264", "-c:a", "aac",
-                    "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black",
-                    str(out_name)
-                ]
-                subprocess.run(cmd, check=False, stderr=subprocess.DEVNULL)
-                if out_name.exists():
-                    print(f"   ✅ Saved: {out_name.name}")
-                    results.append(out_name)
-            return results
-
-        # ----------------------------
-        # MAIN
-        # ----------------------------
-        def main():
-            # 1. Direct Download with Wget
-            direct_download_wget(VIDEO_URL, VIDEO_PATH)
-            
-            # 2. Audio
-            convert_video_to_audio(VIDEO_PATH, AUDIO_PATH)
-            
-            # 3. Transcribe
-            transcriber = FasterWhisperTranscriber(WHISPER_MODEL_NAME)
-            res = transcriber.transcribe(AUDIO_PATH)
-            
-            # 4. Analyze
-            editor = GPT4VideoEditor(openai_client, VIDEO_PATH, res)
-            gpt_res = editor.analyze()
-            if not gpt_res: return
-            
-            segments = editor.parse(gpt_res)
-            print(f"   found {len(segments)} valid segments")
-
-            # 5. Cut
-            files = cut_video(VIDEO_PATH, segments, OUTPUT_DIR)
-            
-            # 6. Zip
-            if files:
-                import zipfile
-                print(f"\n📦 Zipping results to {ZIP_OUTPUT_PATH}...")
-                with zipfile.ZipFile(ZIP_OUTPUT_PATH, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                    for f in files:
-                        zipf.write(f, f.name)
-                print("✅ Zip created successfully")
-            else:
-                print("⚠️ No segments created to zip.")
-
-        if __name__ == "__main__":
-            main()
-        EOF
-        
-        # Jalankan Script
-        python main.py
-
-    # 4. Upload Hasil Output (Zip File)
-    - name: Upload Viral Segments Zip
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: viral-video-results
-        path: viral_segments.zip
-        retention-days: 5
+      - name: Upload Result
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: viral-video-results
+          path: viral_segments.zip
+          retention-days: 5
