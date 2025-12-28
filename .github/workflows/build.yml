@@ -22,10 +22,11 @@ jobs:
       with:
         python-version: '3.10'
 
+    # Tambahkan wget di sini
     - name: Install System Deps
       run: |
         sudo apt-get update
-        sudo apt-get install -y ffmpeg curl
+        sudo apt-get install -y ffmpeg wget
 
     # 2. Install Python Libraries
     - name: Install Python Packages
@@ -40,7 +41,7 @@ jobs:
         from pathlib import Path
 
         print("=" * 60)
-        print("VIRAL VIDEO EDITOR - GITHUB ACTIONS VERSION")
+        print("VIRAL VIDEO EDITOR - WGET VERSION")
         print("=" * 60)
 
         import torch
@@ -51,9 +52,8 @@ jobs:
         # ----------------------------
         # CONFIGURATION
         # ----------------------------
-        # URL SESUAI PERMINTAAN ANDA
+        # URL PANJANG DARI USER
         VIDEO_URL = "https://api.vidssave.com/api/contentsite_api/media/download_redirect?request=sgRpmKL3iNBpyIDr4IgGHBXJiSxcf0EYQuGexs_6KdEalT5ycrs3ffYBEZXevrdUBcrNn6iDw8MfLNTFhlNy7biCIOWf4sDWWBA_S3Gc0ACg1ZPIBzwNN6iyUU-0-PuEErnV6vklMuUiHCyNARF0XKYdjAEXIFyrKF3ytFZL3SURwBQ6zqTIxoinSGmbNRzuDj7GLLN2-qE4j55wtrmuN0sRuMHC3v3eqf14UHFW6OQMmpQ5sIwzvVB6Y5OhROhLgjaA0g8XRTd1z8-rT37YaXo2Y1N59CFMiBNLYoMKlQY-ogHXajXJ3IPsDSTl679jtoOgZpQQY4lq8X-k8lRdgZ5x16iwKPU9AC5d20FwHAFwPaA6sqqj6Sulox0JtTHVQT3xcaUUJowztbrK3N1wClY_bp0pTnhFn4ntpiJhobshFeQwTW0cvTh7u-DnwrB6zF3N3uAfdG9YkBFZZfMIps_fqAN_JZe1TE8Xy6dOcm1cAkp4CQA-6VSb2h75I3aACfjLy872k1vGM7UyG_aS1MqWJUICirs_GRhll-ZswtvtiONJHwWROte6JB-8vU4YEOzzqQAnMb6vwwKFoFArv6XjRP9hX__3UF6yn8R7YYtp9bMuc53-ovjN9sdZoX02"
-        
         
         API_KEY = "Kontolondon" 
         API_BASE = "https://tes-coral.vercel.app/v1/"
@@ -87,50 +87,42 @@ jobs:
         # ----------------------------
         # UTILITY FUNCTIONS
         # ----------------------------
-        def smart_download(url: str, output_path: Path):
-            """Download video with fallback mechanism (yt-dlp -> curl)"""
-            print(f"\n📥 DOWNLOADING VIDEO")
-            print(f"   Target: {url[:60]}...")
+        def direct_download_wget(url, output_path):
+            """Download video using pure wget"""
+            print(f"\n📥 DOWNLOADING VIDEO WITH WGET")
+            print(f"   Target: {url[:50]}...")
             
-            # METHOD 1: Try yt-dlp first
-            print("   👉 Attempt 1: Using yt-dlp...")
+            # Hapus file lama jika ada
+            if output_path.exists():
+                os.remove(output_path)
+                
             try:
-                cmd = [
-                    "yt-dlp",
-                    "-o", str(output_path),
-                    "--quiet", "--no-warnings",
-                    "--no-check-certificate",
-                    url
-                ]
-                subprocess.run(cmd, check=True, timeout=300)
-                if output_path.exists() and output_path.stat().st_size > 1000:
-                    print(f"   ✅ Download successful via yt-dlp")
-                    return output_path
-            except Exception as e:
-                print(f"   ⚠️ yt-dlp failed: {e}")
-
-            # METHOD 2: Fallback to curl (Direct Download)
-            print("   👉 Attempt 2: Using curl (Direct Link Fallback)...")
-            try:
-                # User-Agent palsu agar tidak diblokir server
+                # Menggunakan User-Agent agar tidak diblokir
                 user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+                
                 cmd = [
-                    "curl", "-L", 
-                    "-A", user_agent,
-                    "-o", str(output_path),
+                    "wget", 
+                    "--user-agent", user_agent,
+                    "-O", str(output_path),
                     url
                 ]
-                subprocess.run(cmd, check=True, timeout=600)
+                
+                # Check=True akan raise error jika wget gagal (non-zero exit code)
+                subprocess.run(cmd, check=True)
                 
                 if output_path.exists() and output_path.stat().st_size > 1000:
                     size_mb = output_path.stat().st_size / (1024 * 1024)
-                    print(f"   ✅ Download successful via curl: {size_mb:.2f} MB")
+                    print(f"   ✅ Download successful: {size_mb:.2f} MB")
                     return output_path
                 else:
-                    raise FileNotFoundError("File is empty or not found after curl")
+                    raise FileNotFoundError("File downloaded but empty or too small")
+                    
+            except subprocess.CalledProcessError as e:
+                print(f"   ❌ Wget failed with exit code {e.returncode}")
+                raise Exception("Download failed via wget")
             except Exception as e:
-                print(f"   ❌ All download methods failed: {str(e)}")
-                raise Exception("Could not download video. The link might be expired (410 Gone).")
+                print(f"   ❌ Download error: {e}")
+                raise
 
         def convert_video_to_audio(video_path: Path, audio_path: Path) -> Path:
             """Convert to WAV"""
@@ -208,8 +200,9 @@ jobs:
                 for seg in segments[:50]:
                     transcript_text += f"[{seg['start']:.1f}s - {seg['end']:.1f}s]: {seg['text']}\\n"
                 
-                system_prompt = "You are a viral video editor. Create segments UNDER 60 SECONDS based on the transcript. Return ONLY a JSON array with objects containing: start_time, end_time, title, hook, target_platform."
-                user_prompt = f"Video Duration: {self.duration}s. Analyze this transcript and find viral moments. Transcript:\\n{transcript_text}\\n\\nReturn JSON array only."
+                # Instruction to return clean JSON
+                system_prompt = "You are a viral video editor. Create segments UNDER 60 SECONDS. Return ONLY a JSON array. Format: [{\"start_time\": 0.0, \"end_time\": 10.0, \"title\": \"...\", \"hook\": \"...\"}]"
+                user_prompt = f"Video Duration: {self.duration}s. Transcript:\\n{transcript_text}\\n\\nFind viral moments. Return JSON array only. NO text 's' in timestamps, use pure numbers."
 
                 try:
                     response = self.client.chat.completions.create(
@@ -228,10 +221,21 @@ jobs:
                     if not match: return []
                     data = json.loads(match.group(0))
                     
+                    # FUNGSI MEMBERSIHKAN FORMAT WAKTU (Mencegah error '0.0s')
+                    def clean_time(t):
+                        # Hapus semua karakter yang bukan angka atau titik
+                        clean_str = re.sub(r'[^\d.]', '', str(t))
+                        if not clean_str: return 0.0
+                        return float(clean_str)
+
                     valid = []
                     for i, item in enumerate(data, 1):
-                        start, end = float(item['start_time']), float(item['end_time'])
+                        # Gunakan clean_time di sini
+                        start = clean_time(item['start_time'])
+                        end = clean_time(item['end_time'])
+                        
                         if (end - start) > 60: end = start + 60
+                        
                         item['index'] = i
                         item['start_time'] = start
                         item['end_time'] = end
@@ -239,7 +243,8 @@ jobs:
                         valid.append(item)
                     return valid
                 except Exception as e:
-                    print(f"❌ Parse Error: {e}")
+                    print(f"❌ Parse Error details: {e}")
+                    print(f"❌ Raw Response: {gpt_response[:200]}...") # Print raw for debug
                     return []
 
         # ----------------------------
@@ -269,9 +274,8 @@ jobs:
         # MAIN
         # ----------------------------
         def main():
-            # 1. Smart Download (try yt-dlp -> then curl)
-            if not VIDEO_PATH.exists():
-                smart_download(VIDEO_URL, VIDEO_PATH)
+            # 1. Direct Download with Wget
+            direct_download_wget(VIDEO_URL, VIDEO_PATH)
             
             # 2. Audio
             convert_video_to_audio(VIDEO_PATH, AUDIO_PATH)
@@ -299,6 +303,8 @@ jobs:
                     for f in files:
                         zipf.write(f, f.name)
                 print("✅ Zip created successfully")
+            else:
+                print("⚠️ No segments created to zip.")
 
         if __name__ == "__main__":
             main()
