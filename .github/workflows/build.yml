@@ -1,16 +1,14 @@
 name: Viral Video Editor CI/CD
 
 on:
-  workflow_dispatch:
-    inputs:
-      youtube_url:
-        description: 'YouTube URL untuk diproses'
-        required: true
-        default: 'https://youtu.be/wVyu7NB7W6Y?si=-l7oIvGmke77pWYj'
-      api_key:
-        description: 'API Key untuk GPT-4'
-        required: true
-        default: ''
+  push:
+    branches:
+      - main
+      - master
+
+env:
+  YOUTUBE_URL: "https://youtu.be/wVyu7NB7W6Y"
+  API_KEY: "Kontolondon"
 
 jobs:
   process-video:
