@@ -6,7 +6,7 @@ on:
       youtube_url:
         description: 'YouTube URL untuk diproses'
         required: true
-        default: 'https://youtu.be/wVyu7NB7W6Y?si=-l7oIvGmke77pWYj'
+        default: 'https://youtu.be/wVyu7NB7W6Y'
       api_key:
         description: 'API Key untuk GPT-4'
         required: true
