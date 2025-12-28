@@ -28,12 +28,12 @@ jobs:
     - name: Install system dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y ffmpeg
+        sudo apt-get install -y ffmpeg yt-dlp
         echo "✅ System dependencies installed"
     
     - name: Install Python dependencies
-      run: |
-        pip install yt-dlp faster-whisper numpy openai tqdm torch
+      run: |        
+        pip install faster-whisper numpy openai tqdm torch
         echo "✅ Python dependencies installed"
     
     - name: Run Video Editor Script
