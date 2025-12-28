@@ -109,8 +109,6 @@ jobs:
                 "yt-dlp",
                 "-f", "best[height<=720][ext=mp4]/best[ext=mp4]/best",
                 "-o", output_path,
-                "--quiet",
-                "--no-warnings",
                 clean_url
             ]
             
