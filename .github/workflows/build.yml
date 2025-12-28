@@ -6,14 +6,10 @@ on:
       youtube_url:
         description: 'YouTube URL'
         required: true
-        default: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'
+        default: 'https://youtu.be/wn717YmB1z0'
       api_key:
         description: 'API Key (OpenAI)'
         required: true
-        default: ''
-      cookies_content:
-        description: 'Isi Netscape Cookies (Opsional - Jika error bot berlanjut)'
-        required: false
         default: ''
 
 jobs:
@@ -24,7 +20,6 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v3
     
-    # FIX 1: Install Node.js untuk yt-dlp
     - name: Setup Node.js
       uses: actions/setup-node@v3
       with:
@@ -39,26 +34,13 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y ffmpeg
-        echo "✅ System dependencies installed"
     
     - name: Install Python dependencies
       run: |        
-        # Install yt-dlp terbaru
-        pip install --upgrade yt-dlp
+        # Install yt-dlp versi paling baru (penting!)
+        pip install -U "yt-dlp[default]" 
         pip install faster-whisper numpy openai tqdm torch
-        echo "✅ Python dependencies installed"
         
-    - name: Prepare Cookies (If Provided)
-      env:
-        COOKIES: ${{ github.event.inputs.cookies_content }}
-      run: |
-        if [ -n "$COOKIES" ]; then
-          echo "$COOKIES" > cookies.txt
-          echo "🍪 Cookies file created from input"
-        else
-          echo "ℹ️ No cookies provided, trying client spoofing method"
-        fi
-
     - name: Run Video Editor Script
       env:
         API_KEY: ${{ github.event.inputs.api_key }}
@@ -66,79 +48,83 @@ jobs:
       run: |
         echo "🚀 Starting Viral Video Editor..."
         
-        # Create output directory
         mkdir -p output
         
-        # Create Python script file
         cat > video_editor.py << 'EOF'
         import os, sys, subprocess, json, time, re
         from pathlib import Path
         import torch
         from openai import OpenAI
-        from tqdm import tqdm
-        import numpy as np
         
         print("=" * 60)
-        print("VIRAL VIDEO EDITOR - GitHub Actions Edition")
+        print("VIRAL VIDEO EDITOR - FIX BYPASS")
         print("=" * 60)
         
         # CONFIGURATION
         YOUTUBE_URL = os.getenv("YOUTUBE_URL", "").strip()
         API_KEY = os.getenv("API_KEY", "").strip()
         
-        # Validasi URL
-        if not YOUTUBE_URL or len(YOUTUBE_URL) < 5:
-            print("❌ Error: YOUTUBE_URL wajib diisi!")
+        if not YOUTUBE_URL:
+            print("❌ Error: URL Kosong")
             sys.exit(1)
             
-        print(f"🔗 Target URL: {YOUTUBE_URL}")
-        
-        # Setup directories
-        OUTPUT_DIR = Path("./output")
-        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        
         # ----------------------------
-        # 1. DOWNLOADER (FIXED FOR BOT DETECTION)
+        # 1. DOWNLOADER (UPDATED STRATEGY)
         # ----------------------------
         def download_youtube(url: str, output_path="./video.mp4") -> Path:
             print(f"\n📥 DOWNLOADING VIDEO...")
             
-            clean_url = url.split('&')[0]
+            # Membersihkan URL (Hapus ?si=... dan tracking lainnya)
+            if "?" in url:
+                clean_url = url.split("?")[0]
+            else:
+                clean_url = url
             
-            # FIX: Teknik Anti-Bot Detection
-            # Kita menyamar sebagai Android Client karena Web Client sering diblokir IP datacenter
+            print(f"   Clean URL: {clean_url}")
+            
+            # STRATEGI BARU: Menggunakan Client iOS tanpa User-Agent manual
+            # Client 'ios' seringkali lebih dipercaya daripada 'android' atau 'web' di Data Center
             cmd = [
                "yt-dlp",
                 "-f", "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4] / bv*+ba/b",
                 "--force-overwrites",
                 "--no-playlist",
-                # Menggunakan Android Client API (Lebih ramah untuk server IP)
-                "--extractor-args", "youtube:player_client=android", 
-                "--user-agent", "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Mobile Safari/537.36",
+                # Menggunakan iOS Client (Taktik Bypass)
+                "--extractor-args", "youtube:player_client=ios",
+                "--no-check-certificates",
                 "-o", output_path,
                 clean_url
             ]
             
-            # Gunakan cookies jika user memberikannya
-            if os.path.exists("cookies.txt"):
-                print("   🍪 Using provided cookies.txt")
-                cmd.extend(["--cookies", "cookies.txt"])
-            
             try:
-                # Menjalankan command dan menangkap output real-time jika error
-                result = subprocess.run(cmd, capture_output=True, text=True)
+                # Coba download dengan taktik iOS
+                print("   🚀 Attempting download with iOS client spoofing...")
+                subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                 
-                if result.returncode == 0 and Path(output_path).exists() and Path(output_path).stat().st_size > 0:
+                if Path(output_path).exists():
                     size = Path(output_path).stat().st_size / (1024 * 1024)
                     print(f"   ✅ Download successful: {size:.1f} MB")
                     return Path(output_path)
-                else:
-                    # Tampilkan error detail dari yt-dlp
-                    print(f"❌ Download Failed. yt-dlp output:\n{result.stderr}")
-                    raise Exception("yt-dlp execution failed")
-                    
-            except Exception as e:
-                raise Exception(f"Download Error: {str(e)}")
+            except subprocess.CalledProcessError as e:
+                print(f"   ⚠️ iOS method failed. Error: {e.stderr}")
+                
+                # FALLBACK: Coba Web Client jika iOS gagal
+                print("   🔄 Trying Fallback (Web Client)...")
+                cmd_fallback = [
+                   "yt-dlp",
+                    "-f", "b", # Quality rendah dulu biar connect
+                    "--extractor-args", "youtube:player_client=web",
+                    "-o", output_path,
+                    clean_url
+                ]
+                try:
+                    subprocess.run(cmd_fallback, check=True)
+                    if Path(output_path).exists():
+                        print(f"   ✅ Download successful (Fallback mode)")
+                        return Path(output_path)
+                except Exception as ex:
+                    print(f"   ❌ ALL METHODS FAILED. Google is blocking GitHub IP.")
+                    raise Exception("Silakan gunakan Cookies.txt untuk video ini.")
 
         # ----------------------------
         # 2. AUDIO CONVERTER
@@ -155,36 +141,25 @@ jobs:
             return audio_path
 
         # ----------------------------
-        # 3. TRANSCRIBER & GPT (SIMPLIFIED)
+        # 3. PROCESS & CUT
         # ----------------------------
-        def process_content(video_path):
-            # A. Extract Audio
-            audio_path = convert_to_audio(video_path)
-            
-            # B. Transcribe
-            print("\n🎙️ TRANSCRIBING (Faster-Whisper)")
+        def process_and_cut(video_path):
+            # Transcribe
+            print("\n🎙️ TRANSCRIBING")
             from faster_whisper import WhisperModel
-            model = WhisperModel("tiny", device="cpu", compute_type="int8") # Pakai 'tiny' biar cepat
-            segments_gen, _ = model.transcribe(str(audio_path))
+            model = WhisperModel("tiny", device="cpu", compute_type="int8")
+            segments_gen, _ = model.transcribe(str(convert_to_audio(video_path)))
             
-            segments = []
             text_full = ""
             for seg in segments_gen:
-                segments.append({"start": seg.start, "end": seg.end, "text": seg.text.strip()})
                 text_full += seg.text + " "
-            
-            print(f"   ✅ Transcribed {len(segments)} lines")
-
-            # C. GPT Analysis
-            print("\n🧠 GPT-4 ANALYSIS")
+                
+            # GPT Request
+            print("\n🧠 GPT ANALYSIS")
             client = OpenAI(api_key=API_KEY, base_url="https://tes-coral.vercel.app/v1/")
             
-            prompt = f"""
-            Identify 1 viral segment (15-60s) from this transcript.
-            Return ONLY raw JSON: [{{"start": 10.5, "end": 40.2, "title": "Viral Clip"}}]
-            
-            Transcript: {text_full[:4000]}
-            """
+            # Simple prompt agar output stabil
+            prompt = f"""Extract 1 viral clip (max 30s). Return JSON: [{{"start": 10, "end": 20}}] Transcript: {text_full[:2000]}"""
             
             try:
                 resp = client.chat.completions.create(
@@ -192,60 +167,39 @@ jobs:
                     messages=[{"role": "user", "content": prompt}]
                 )
                 content = resp.choices[0].message.content
-                # Clean JSON code blocks
-                if "```" in content: content = content.split("```")[1].replace("json", "").strip()
+                if "```" in content: content = content.split("```")[1].replace("json", "")
                 cuts = json.loads(content)
-                return cuts
-            except Exception as e:
-                print(f"⚠️ GPT Error: {e}. Using fallback.")
-                # Fallback: Ambil 30 detik pertama
-                return [{"start": 0, "end": 30, "title": "Highlight"}]
-
-        # ----------------------------
-        # 4. CUTTER
-        # ----------------------------
-        def cut_video(video_path, cuts):
-            print(f"\n✂️ CUTTING VIDEO")
+            except:
+                cuts = [{"start": 0, "end": 15}] # Fallback
+            
+            # Cut
+            print("\n✂️ CUTTING")
             results = []
             for i, cut in enumerate(cuts):
-                out_name = OUTPUT_DIR / f"clip_{i+1}.mp4"
-                cmd = [
+                out = Path(f"output/clip_{i}.mp4")
+                subprocess.run([
                     "ffmpeg", "-y", "-i", str(video_path),
                     "-ss", str(cut['start']), "-to", str(cut['end']),
-                    "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "copy",
-                    "-loglevel", "error", str(out_name)
-                ]
-                subprocess.run(cmd)
-                results.append(out_name)
+                    "-c:v", "libx264", "-preset", "ultrafast",
+                    "-loglevel", "error", str(out)
+                ])
+                results.append(out)
             return results
 
-        # ----------------------------
-        # MAIN
-        # ----------------------------
         if __name__ == "__main__":
             try:
-                # 1. Download
-                video_path = download_youtube(YOUTUBE_URL)
+                vid = download_youtube(YOUTUBE_URL)
+                res = process_and_cut(vid)
                 
-                # 2. Process
-                cuts = process_content(video_path)
-                
-                # 3. Cut
-                files = cut_video(video_path, cuts)
-                
-                print(f"\n✅ DONE! Created {len(files)} clips.")
-                
-                # Zip results
                 import zipfile
                 with zipfile.ZipFile("viral_segments.zip", 'w') as z:
-                    for f in files: z.write(f, f.name)
-                    
+                    for f in res: z.write(f, f.name)
+                print("\n✅ SUCCESS")
             except Exception as e:
-                print(f"\n❌ FATAL ERROR: {e}")
+                print(f"\n❌ FATAL: {e}")
                 sys.exit(1)
         EOF
         
-        # Jalankan Script
         python video_editor.py
     
     - name: Upload artifacts
@@ -254,4 +208,3 @@ jobs:
       with:
         name: viral-video-segments
         path: viral_segments.zip
-        retention-days: 3
