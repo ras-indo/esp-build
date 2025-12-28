@@ -1,3 +1,4 @@
+
 name: Viral Video Automation
 
 on:
@@ -21,10 +22,10 @@ jobs:
       with:
         python-version: '3.10'
 
-    - name: Install System Deps (FFmpeg)
+    - name: Install System Deps
       run: |
         sudo apt-get update
-        sudo apt-get install -y ffmpeg
+        sudo apt-get install -y ffmpeg curl
 
     # 2. Install Python Libraries
     - name: Install Python Packages
@@ -50,15 +51,15 @@ jobs:
         # ----------------------------
         # CONFIGURATION
         # ----------------------------
-        # URL VIDEO
-        YOUTUBE_URL = "https://nsf-m4c-one-fr-03.sf-converter.com/prod-new/download/eyJtZWRpYUlkIjoiVEdFdi1IMkRZdUkiLCJ0aXRsZSI6Ik1vbWVuIEtldGlrYSBQdXRpbiBNZW51bWJhbmdrYW4gT3JhbmcgVGVya2F5YSBkaSBSdXNpYSBEYWxhbSBTZWtlamFwISIsImZvcm1hdCI6Im1wNCIsInF1YWxpdHkiOiI3MjAiLCJ0aW1lc3RhbXAiOjE3NjY5MjE1Mzh9.ea87b7c602174bd66e8876df674ceaf8"
+        # URL SESUAI PERMINTAAN ANDA
+        VIDEO_URL = "https://api.vidssave.com/api/contentsite_api/media/download_redirect?request=sgRpmKL3iNBpyIDr4IgGHBXJiSxcf0EYQuGexs_6KdEalT5ycrs3ffYBEZXevrdUBcrNn6iDw8MfLNTFhlNy7biCIOWf4sDWWBA_S3Gc0ACg1ZPIBzwNN6iyUU-0-PuEErnV6vklMuUiHCyNARF0XKYdjAEXIFyrKF3ytFZL3SURwBQ6zqTIxoinSGmbNRzuDj7GLLN2-qE4j55wtrmuN0sRuMHC3v3eqf14UHFW6OQMmpQ5sIwzvVB6Y5OhROhLgjaA0g8XRTd1z8-rT37YaXo2Y1N59CFMiBNLYoMKlQY-ogHXajXJ3IPsDSTl679jtoOgZpQQY4lq8X-k8lRdgZ5x16iwKPU9AC5d20FwHAFwPaA6sqqj6Sulox0JtTHVQT3xcaUUJowztbrK3N1wClY_bp0pTnhFn4ntpiJhobshFeQwTW0cvTh7u-DnwrB6zF3N3uAfdG9YkBFZZfMIps_fqAN_JZe1TE8Xy6dOcm1cAkp4CQA-6VSb2h75I3aACfjLy872k1vGM7UyG_aS1MqWJUICirs_GRhll-ZswtvtiONJHwWROte6JB-8vU4YEOzzqQAnMb6vwwKFoFArv6XjRP9hX__3UF6yn8R7YYtp9bMuc53-ovjN9sdZoX02"
+        
         
         API_KEY = "Kontolondon" 
         API_BASE = "https://tes-coral.vercel.app/v1/"
         WHISPER_MODEL_NAME = "medium"
 
-        # --- SETUP DIRECTORIES (Relative Paths) ---
-        # Menggunakan current working directory (project root)
+        # --- SETUP DIRECTORIES ---
         BASE_DIR = Path.cwd()
         OUTPUT_DIR = BASE_DIR / "output"
         MODELS_DIR = BASE_DIR / "models"
@@ -86,29 +87,57 @@ jobs:
         # ----------------------------
         # UTILITY FUNCTIONS
         # ----------------------------
-        def download_youtube(url: str, output_path) -> Path:
-            """Download video"""
+        def smart_download(url: str, output_path: Path):
+            """Download video with fallback mechanism (yt-dlp -> curl)"""
             print(f"\n📥 DOWNLOADING VIDEO")
-            clean_url = url.split('?')[0]
+            print(f"   Target: {url[:60]}...")
+            
+            # METHOD 1: Try yt-dlp first
+            print("   👉 Attempt 1: Using yt-dlp...")
             try:
                 cmd = [
                     "yt-dlp",
-                    "-f", "best[height<=720][ext=mp4]/best[ext=mp4]/best",
                     "-o", str(output_path),
                     "--quiet", "--no-warnings",
-                    clean_url
+                    "--no-check-certificate",
+                    url
                 ]
                 subprocess.run(cmd, check=True, timeout=300)
-                if output_path.exists():
-                    print(f"   ✅ Download successful: {output_path.name}")
+                if output_path.exists() and output_path.stat().st_size > 1000:
+                    print(f"   ✅ Download successful via yt-dlp")
                     return output_path
-                raise FileNotFoundError("Video not found after download")
             except Exception as e:
-                raise Exception(f"Download failed: {str(e)}")
+                print(f"   ⚠️ yt-dlp failed: {e}")
+
+            # METHOD 2: Fallback to curl (Direct Download)
+            print("   👉 Attempt 2: Using curl (Direct Link Fallback)...")
+            try:
+                # User-Agent palsu agar tidak diblokir server
+                user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+                cmd = [
+                    "curl", "-L", 
+                    "-A", user_agent,
+                    "-o", str(output_path),
+                    url
+                ]
+                subprocess.run(cmd, check=True, timeout=600)
+                
+                if output_path.exists() and output_path.stat().st_size > 1000:
+                    size_mb = output_path.stat().st_size / (1024 * 1024)
+                    print(f"   ✅ Download successful via curl: {size_mb:.2f} MB")
+                    return output_path
+                else:
+                    raise FileNotFoundError("File is empty or not found after curl")
+            except Exception as e:
+                print(f"   ❌ All download methods failed: {str(e)}")
+                raise Exception("Could not download video. The link might be expired (410 Gone).")
 
         def convert_video_to_audio(video_path: Path, audio_path: Path) -> Path:
             """Convert to WAV"""
             print(f"\n🔄 CONVERTING VIDEO TO AUDIO")
+            if not video_path.exists():
+                raise FileNotFoundError(f"Video file not found at {video_path}")
+                
             cmd = [
                 "ffmpeg", "-i", str(video_path), "-vn",
                 "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
@@ -137,7 +166,7 @@ jobs:
                 from faster_whisper import WhisperModel
                 self.model = WhisperModel(
                     self.model_name,
-                    device="cpu", # GitHub Actions standard runner is CPU
+                    device="cpu",
                     compute_type="int8",
                     download_root=str(MODELS_DIR)
                 )
@@ -195,7 +224,6 @@ jobs:
 
             def parse(self, gpt_response):
                 try:
-                    # Simple JSON extraction
                     match = re.search(r'\[.*\]', gpt_response.strip(), re.DOTALL)
                     if not match: return []
                     data = json.loads(match.group(0))
@@ -203,7 +231,7 @@ jobs:
                     valid = []
                     for i, item in enumerate(data, 1):
                         start, end = float(item['start_time']), float(item['end_time'])
-                        if (end - start) > 60: end = start + 60 # Force max 60s
+                        if (end - start) > 60: end = start + 60
                         item['index'] = i
                         item['start_time'] = start
                         item['end_time'] = end
@@ -241,9 +269,9 @@ jobs:
         # MAIN
         # ----------------------------
         def main():
-            # 1. Download
+            # 1. Smart Download (try yt-dlp -> then curl)
             if not VIDEO_PATH.exists():
-                download_youtube(YOUTUBE_URL, VIDEO_PATH)
+                smart_download(VIDEO_URL, VIDEO_PATH)
             
             # 2. Audio
             convert_video_to_audio(VIDEO_PATH, AUDIO_PATH)
