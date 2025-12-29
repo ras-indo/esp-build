@@ -1,4 +1,4 @@
-name: 🎬 Pro Editor — GPT-4 & Whisper Medium
+name: 🎬 AI Director — Named Files & Deep Meta
 
 on:
   workflow_dispatch:
@@ -13,56 +13,52 @@ on:
         default: '5'
 
 jobs:
-  pro-editor-pipeline:
+  director-pipeline:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Workspace
+      - name: Checkout Studio
         uses: actions/checkout@v4
 
-      - name: Setup Python 3.10
+      - name: Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
-      - name: Install System Utilities
+      - name: Install Tools
         run: |
           sudo apt-get update -y
           sudo apt-get install -y ffmpeg
 
-      - name: Install Python Dependencies
+      - name: Install AI Libraries
         run: |
           python -m pip install --upgrade pip
-          # Torch cpu version secara default di linux, whisper akan cek ketersediaan cuda
           python -m pip install -q torch numpy
           python -m pip install -q yt-dlp ffmpeg-python tiktoken
-          # LangChain Core (Stable)
           python -m pip install -q langchain-core langchain-openai langchain-community
-          # Whisper from Git
           python -m pip install -q git+https://github.com/openai/whisper.git
 
-      - name: Run Professional Editor Script
+      - name: Run Director Script
         run: |
-          cat > editor_brain.py << 'EOF'
+          cat > ai_director.py << 'EOF'
           import os
           import sys
           import json
+          import re
           import subprocess
           import gc
           import torch
           import whisper
           from pathlib import Path
 
-          # --- LANGCHAIN IMPORTS (CORE STABLE) ---
+          # --- LANGCHAIN ---
           try:
               from langchain_openai import ChatOpenAI
               from langchain_core.prompts import ChatPromptTemplate
               from langchain_core.output_parsers import JsonOutputParser
-          except ImportError as e:
-              print(f"FATAL: {e}")
-              sys.exit(1)
+          except ImportError:
+              sys.exit("Critical: LangChain modules not found.")
 
-          # === 0. CONFIGURATION & AUTH ===
-          # Hardcoded Credentials
+          # === CONFIGURATION ===
           API_KEY = "Kontolondon"
           API_BASE = "https://tes-coral.vercel.app/v1/"
           
@@ -75,235 +71,211 @@ jobs:
           OUTDIR.mkdir(parents=True, exist_ok=True)
           VIDEO_PATH = WORKDIR / "source.mp4"
 
-          # === 1. HARDWARE DETECTION ===
-          def get_device_config():
-              print("-" * 30)
+          # === 1. HARDWARE CHECK ===
+          def get_device():
               if torch.cuda.is_available():
-                  vram = torch.cuda.get_device_properties(0).total_memory / 1e9
-                  print(f"🖥️  DEVICE: GPU DETECTED ({torch.cuda.get_device_name(0)})")
-                  print(f"🚀 VRAM: {vram:.2f} GB")
+                  print(f"🖥️  GPU MODE: {torch.cuda.get_device_name(0)}")
                   return "cuda"
-              else:
-                  print("🖥️  DEVICE: CPU DETECTED")
-                  print("⚠️  Running Whisper 'Medium' on CPU is heavy. Optimization enabled.")
-                  return "cpu"
-              print("-" * 30)
+              print("🖥️  CPU MODE (Standard)")
+              return "cpu"
 
-          DEVICE = get_device_config()
+          DEVICE = get_device()
 
-          # === 2. DOWNLOADER ===
-          def download_video():
-              print(f"⬇️  Downloading Source Material...")
+          # === 2. DOWNLOAD ===
+          def download_source():
+              print("⬇️  Fetching Video...")
               subprocess.run(["yt-dlp", VIDEO_URL, "-o", str(VIDEO_PATH), "--force-overwrites"], stdout=subprocess.DEVNULL)
               if not VIDEO_PATH.exists() or VIDEO_PATH.stat().st_size < 1000:
-                  print("🔄 Fallback to cURL...")
                   subprocess.run(["curl", "-L", VIDEO_URL, "-o", str(VIDEO_PATH)])
-              
-              if not VIDEO_PATH.exists():
-                  raise RuntimeError("Download Failed.")
-              print("✅ Download Complete.")
+              if not VIDEO_PATH.exists(): raise Exception("Download Failed")
+              print("✅ Video Acquired.")
 
-          # === 3. HIGH-FIDELITY TRANSCRIPTION ===
-          def transcribe_and_optimize():
-              print(f"👂 Loading Whisper Model: MEDIUM (Multilingual)...")
-              
-              # Load model
-              # Jika CPU, fp16=False untuk mencegah warning/error
+          # === 3. WHISPER (EARS) ===
+          def listen_to_video():
+              print("👂 Whisper Medium (Listening)...")
               try:
                   model = whisper.load_model("medium", device=DEVICE)
-                  print("✅ Model Loaded.")
+                  result = model.transcribe(str(VIDEO_PATH), fp16=(DEVICE=="cuda"), verbose=False)
+                  
+                  # RAM CLEANUP
+                  del model
+                  gc.collect()
+                  if DEVICE == "cuda": torch.cuda.empty_cache()
+                  
+                  return result["segments"]
               except Exception as e:
-                  print(f"❌ Failed to load model: {e}")
+                  print(f"❌ Audio Error: {e}")
                   sys.exit(1)
 
-              print("⏳ Transcribing (This requires precision, please wait)...")
-              # Transcribe
-              result = model.transcribe(
-                  str(VIDEO_PATH), 
-                  fp16=(DEVICE == "cuda"),
-                  verbose=False
-              )
+          # === 4. THE AI DIRECTOR (ADVISOR + EDITOR) ===
+          def director_decision(segments):
+              print("🧠 AI Director & Advisor are conferring...")
               
-              segments = result["segments"]
-              print(f"✅ Transcription Complete: {len(segments)} segments extracted.")
-              
-              # === CRITICAL MEMORY OPTIMIZATION ===
-              # Kita harus menghapus model Whisper dari RAM agar ada ruang untuk LangChain/FFmpeg
-              # terutama di GitHub Runner yang RAM-nya terbatas (7GB).
-              del model
-              gc.collect()
-              torch.cuda.empty_cache() if DEVICE == "cuda" else None
-              print("🧹 Memory cleaned (Whisper unloaded).")
-              
-              return segments
+              full_text = ""
+              for s in segments:
+                  full_text += f"[{int(s['start'])}s] {s['text']}\n"
 
-          # === 4. GPT-4 PROFESSIONAL EDITOR BRAIN ===
-          def execute_editorial_decisions(segments):
-              print("🧠 Connecting to GPT-4 Editor Brain...")
-              
-              # Format transcript
-              transcript_text = ""
-              for seg in segments:
-                  transcript_text += f"[{int(seg['start'])}s] {seg['text']}\n"
-
-              # Strict JSON Parser
-              parser = JsonOutputParser()
-
-              # Initialize LLM - STRICT MODE (Temp=0)
               llm = ChatOpenAI(
                   model="gpt-4",
-                  temperature=0,  # Zero creativity, pure logic
+                  temperature=0.2, # Sedikit kreativitas untuk caption, tapi strict untuk timestamp
                   openai_api_key=API_KEY,
                   openai_api_base=API_BASE
               )
+              
+              parser = JsonOutputParser()
 
-              # SYSTEM PROMPT: OTORITER & PROFESIONAL
+              # PROMPT YANG SANGAT DETAIL
               template = """
-              Anda adalah EDITOR VIDEO PROFESIONAL SENIOR dengan pengalaman 20 tahun di industri Broadcast dan Digital.
-              
-              Tugas Anda:
-              Analisis transkrip mentah berikut dan ekstrak tepat {num_clips} segmen video dengan potensi viral tertinggi.
+              Anda adalah TIM PRODUKSI VIDEO yang terdiri dari dua persona:
+              1. **THE ADVISOR (Penasihat Viral)**: Ahli algoritma TikTok/Reels yang mengerti psikologi penonton.
+              2. **THE EDITOR (Eksekutor)**: Editor presisi yang memotong video tanpa cacat.
 
-              PERATURAN MUTLAK (STRICT RULES):
-              1. **Akurasi**: Timestamp harus akurat. Jangan memotong kalimat di tengah kata.
-              2. **Konteks**: Pastikan klip memiliki awal (Hook) dan akhir (Punchline/Conclusion) yang jelas.
-              3. **Filter Sampah**: BUANG intro ("Halo guys", "Subscribe"), buffering, atau jeda kosong.
-              4. **Durasi**: Wajib antara 15 detik s.d. 60 detik per klip.
+              TUGAS:
+              Analisis transkrip dan hasilkan {num_clips} klip video pendek terbaik.
+
+              INSTRUKSI PENASIHAT:
+              - Cari "Hook" (kalimat pembuka yang memancing rasa ingin tahu).
+              - Cari emosi (Marah, Tawa, Fakta Mengejutkan).
+              - Hindari bagian membosankan ("Halo guys", "Intro", "Loading").
               
-              OUTPUT:
-              Anda WAJIB memberikan respon HANYA dalam format JSON MURNI tanpa teks pembuka/penutup.
-              Format:
+              INSTRUKSI EDITOR:
+              - Timestamp harus akurat.
+              - Judul harus Clickbait tapi relevan.
+              - Buat Caption Sosmed yang siap posting.
+
+              OUTPUT WAJIB JSON (List of Objects):
               [
                 {{
                   "start_time": 10.5,
-                  "end_time": 45.0,
-                  "title": "Judul Clickbait (B.Indonesia)",
-                  "reasoning": "Analisis profesional kenapa klip ini dipilih",
-                  "viral_score": 95
+                  "end_time": 40.0,
+                  "title": "Judul Viral (Tanpa Emoji)",
+                  "filename_suggestion": "Judul_Viral_Tanpa_Spasi",
+                  "viral_analysis": {{
+                      "hook_score": 95,
+                      "pacing": "Cepat",
+                      "emotion": "Lucu/Tegang/Informatif",
+                      "advisor_notes": "Alasan penasihat memilih bagian ini..."
+                  }},
+                  "social_media": {{
+                      "caption": "Caption menarik untuk diposting...",
+                      "hashtags": ["#fyp", "#viral", "#tag3"]
+                  }},
+                  "transcript_snippet": "Teks transkrip di bagian ini..."
                 }}
               ]
 
-              TRANSKRIP MENTAH:
+              TRANSKRIP SUMBER:
               {transcript}
               """
 
               prompt = ChatPromptTemplate.from_template(template)
               
-              # Batasi input token agar tidak error (GPT-4 punya limit juga tergantung tier)
-              safe_transcript = transcript_text[:20000]
+              # Batasi konteks
+              msgs = prompt.format_messages(num_clips=NUM_CLIPS, transcript=full_text[:18000])
 
-              messages = prompt.format_messages(
-                  num_clips=NUM_CLIPS,
-                  transcript=safe_transcript
-              )
-
-              print("🤔 Analyzing Content Structure...")
               try:
-                  response = llm.invoke(messages)
-                  print("✅ Editorial Decisions Received.")
+                  res = llm.invoke(msgs)
+                  print("✅ Keputusan Direksi Diterima.")
+                  data = parser.parse(res.content)
                   
-                  # Parsing logic
-                  try:
-                      parsed = parser.parse(response.content)
-                      # Normalize to list
-                      if isinstance(parsed, dict):
-                          if "clips" in parsed: return parsed["clips"]
-                          return [parsed]
-                      return parsed
-                  except:
-                      # Fallback manual parsing jika parser gagal
-                      content = response.content.replace("```json", "").replace("```", "").strip()
-                      return json.loads(content)
-
+                  if isinstance(data, dict): return [data]
+                  return data
               except Exception as e:
-                  print(f"❌ Editor Brain Failure: {e}")
-                  if 'response' in locals():
-                      print(f"Raw Output: {response.content}")
-                  return []
-
-          # === 5. CUTTING ROOM (FFMPEG) ===
-          def render_clips(clips):
-              print("✂️  Entering Cutting Room...")
-              
-              for idx, clip in enumerate(clips):
+                  print(f"❌ Brain Failure: {e}")
+                  # Fallback basic parsing jika AI ngoceh
                   try:
-                      start = float(clip["start_time"])
-                      end = float(clip["end_time"])
-                      duration = end - start
-                      
-                      # Safety check
-                      if duration < 5: continue
-                      
-                      filename = f"clip_{idx+1:02d}.mp4"
-                      out_path = OUTDIR / filename
-                      json_path = OUTDIR / f"clip_{idx+1:02d}_meta.json"
+                      content = res.content.replace("```json", "").replace("```", "").strip()
+                      return json.loads(content)
+                  except:
+                      return []
 
-                      # Re-encode is mandatory for frame accuracy
-                      cmd = [
-                          "ffmpeg", "-y",
-                          "-ss", str(start),
-                          "-i", str(VIDEO_PATH),
-                          "-t", str(duration),
-                          "-c:v", "libx264", "-preset", "fast", "-crf", "22",
-                          "-c:a", "aac", "-b:a", "128k",
-                          str(out_path)
-                      ]
+          # === 5. EXPORT & NAMING ===
+          def sanitize_name(name):
+              # Hanya izinkan huruf, angka, dan underscore
+              clean = re.sub(r'[^a-zA-Z0-9]', '_', name)
+              # Hapus underscore berlebih
+              clean = re.sub(r'_+', '_', clean)
+              return clean.strip('_')
+
+          def production(clips):
+              print("✂️  Produksi Dimulai...")
+              
+              for clip in clips:
+                  try:
+                      s = float(clip["start_time"])
+                      e = float(clip["end_time"])
+                      dur = e - s
                       
+                      if dur < 5: continue
+
+                      # Naming Logic
+                      raw_title = clip.get("title", "Untitled")
+                      safe_name = sanitize_name(raw_title)
+                      
+                      # Jika kosong, fallback ke ID
+                      if len(safe_name) < 3: safe_name = f"Viral_Clip_{int(s)}"
+                      
+                      vid_fname = f"{safe_name}.mp4"
+                      json_fname = f"{safe_name}.json"
+                      
+                      vid_path = OUTDIR / vid_fname
+                      json_path = OUTDIR / json_fname
+
+                      # FFMPEG Cutting
+                      cmd = [
+                          "ffmpeg", "-y", "-ss", str(s), "-i", str(VIDEO_PATH),
+                          "-t", str(dur), "-c:v", "libx264", "-preset", "fast",
+                          "-c:a", "aac", str(vid_path)
+                      ]
                       subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                       
-                      # Metadata
-                      meta = {
-                          "file": filename,
-                          "title": clip.get("title", "No Title"),
-                          "editor_note": clip.get("reasoning", ""),
-                          "score": clip.get("viral_score", 0),
-                          "engine": "GPT-4 + Whisper Medium",
-                          "timestamps": {"in": start, "out": end}
+                      # Writing Detailed Metadata
+                      meta_content = {
+                          "file_info": {
+                              "filename": vid_fname,
+                              "duration_sec": round(dur, 2),
+                              "source_time": f"{s}-{e}"
+                          },
+                          "content_strategy": {
+                              "title": clip.get("title"),
+                              "advisor_analysis": clip.get("viral_analysis"),
+                              "transcript": clip.get("transcript_snippet")
+                          },
+                          "social_ready": clip.get("social_media"),
+                          "ai_engine": "Director Mode (GPT-4 + Whisper Medium)"
                       }
-                      
+
                       with open(json_path, "w", encoding="utf-8") as f:
-                          json.dump(meta, f, indent=2, ensure_ascii=False)
+                          json.dump(meta_content, f, indent=2, ensure_ascii=False)
                           
-                      print(f"✨ Rendered: {filename} | Score: {clip.get('viral_score')}")
+                      print(f"✨ Exported: {vid_fname}")
                       
-                  except Exception as e:
-                      print(f"⚠️ Render Error on Clip {idx}: {e}")
+                  except Exception as ex:
+                      print(f"⚠️ Failed to export clip: {ex}")
 
-          # === MAIN ===
           if __name__ == "__main__":
-              download_video()
+              download_source()
+              segs = listen_to_video()
+              if not segs: sys.exit(1)
               
-              # 1. Transcribe
-              segments = transcribe_and_optimize()
-              
-              if not segments:
-                  print("❌ No audio detected.")
-                  sys.exit(1)
-
-              # 2. Analyze (GPT-4)
-              clips = execute_editorial_decisions(segments)
-              
-              if not clips:
-                  print("❌ GPT-4 did not select any clips.")
+              decisions = director_decision(segs)
+              if not decisions: 
+                  print("❌ AI Director tidak menemukan momen viral.")
                   sys.exit(1)
                   
-              # 3. Render
-              render_clips(clips)
-              
-              print("✅ PROJECT COMPLETE.")
+              production(decisions)
+              print("✅ SEMUA SELESAI.")
           EOF
 
-      - name: Run Pipeline
+      - name: Run Director
         env:
           VIDEO_URL: ${{ github.event.inputs.video_url }}
           NUM_SHORTS: ${{ github.event.inputs.num_shorts }}
-        run: python editor_brain.py
+        run: python ai_director.py
 
-      - name: Archive Production
-        run: zip -r Final_Production_Pack.zip output
-
-      - name: Deliver Artifacts
+      - name: Upload Hasil Produksi
         uses: actions/upload-artifact@v4
         with:
-          name: Professional-Cuts
-          path: Final_Production_Pack.zip
+          name: Viral_Shorts_Pack
+          path: output/
+          if-no-files-found: error
