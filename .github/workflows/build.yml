@@ -1,55 +1,4 @@
-name: Viral Shorts — single-run pipeline
-
-on:
-  workflow_dispatch:
-    inputs:
-      video_url:
-        description: 'Direct MP4 URL (will follow redirects)'
-        required: true
-        default: 'https://api.vidssave.com/api/contentsite_api/media/download_redirect?request=sgRpmKL3iNBpyIDr4IgGHBXJiSxcf0EYQuGexs_6KdEalT5ycrs3ffYBEZXevrdUBcrNn6iDw8MfLNTFhlNy7biCIOWf4sDWWBA_S3Gc0ACg1ZPIBzwNN6iyUU-0-PuEErnV6vklMuUiHCyNARF0XKYdjAEXIFyrKF3ytFZL3SURwBQ6zqTIxoinSGmbNRzuDj7GLLN2-qE4j55wtrmuN0sRuMHC3v3eqf14UHFW6OQMmpQ5sIwzvVB6Y5OhROhLgjaA0g8XRTd1z8-rT37YaXo2Y1N59CFMiBNLYoMKlQY-ogHXajXJ3IPsDSTl679jtoOgZpQQY4lq8X-k8lRdgZ5x16iwKPU9AC5d20FwHAFwPaA6sqqj6Sulox0JtTHVQT3xcaUUJowztbrK3N1wClY_bp0pTnhFn4ntpiJhobshFeQwTW0cvTh7u-DnwrB6zF3N3uAfdG9YkBFZZfMIps_fqAN_JZe1TE8Xy6dOcm1cAkp4CQA-6VSb2h75I3aACfjLy872k1vGM7UyG_aS1MqWJUICirs_GRhll-ZswtvtiONJHwWROte6JB-8vU4YEOzzqQAnMb6vwwKFoFArv6XjRP9hX__3UF6yn8R7YYtp9bMuc53-ovjN9sdZoX02'
-      whisper_model:
-        description: 'Whisper model: tiny | base | small | medium | large'
-        required: false
-        default: 'tiny'
-      num_shorts:
-        description: 'Number of short clips to produce'
-        required: false
-        default: '6'
-      min_duration:
-        description: 'Minimum clip duration (seconds)'
-        required: false
-        default: '6'
-      max_duration:
-        description: 'Maximum clip duration (seconds)'
-        required: false
-        default: '30'
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout (required for workflow UI)
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
-
-      - name: Install system packages
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y ffmpeg zip curl
-
-      - name: Install Python packages
-        run: |
-          python -m pip install --upgrade pip setuptools wheel
-          # lightweight and robust installs; whisper from GitHub to ensure latest
-          python -m pip install -q yt-dlp ffmpeg-python scenedetect
-          # install whisper (local) — CPU wheel; GitHub runner CPU-only is expected
-          python -m pip install -q git+https://github.com/openai/whisper.git
-          # If pip tries to install heavy torch, it may take time. We accept default CPU install here.
-      - name: Run pipeline (download / transcribe / cut / zip)
+- name: Run pipeline (download / transcribe / cut / zip)
         env:
           VIDEO_URL: ${{ github.event.inputs.video_url }}
           WHISPER_MODEL: ${{ github.event.inputs.whisper_model }}
@@ -66,180 +15,174 @@ jobs:
           ls -lh "$TMPDIR" || true
 
           python - <<'PY'
-import os, json, math, subprocess
-from pathlib import Path
-tmp = Path(os.environ['TMPDIR'])
-video = tmp / "video.mp4"
-outdir = Path("output")
-outdir.mkdir(parents=True, exist_ok=True)
+          import os, json, math, subprocess
+          from pathlib import Path
+          tmp = Path(os.environ['TMPDIR'])
+          video = tmp / "video.mp4"
+          outdir = Path("output")
+          outdir.mkdir(parents=True, exist_ok=True)
 
-def run(cmd):
-    p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    if p.returncode != 0:
-        raise RuntimeError(f"Command {' '.join(cmd)} failed: {p.stderr}")
-    return p.stdout
+          def run(cmd):
+              p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+              if p.returncode != 0:
+                  raise RuntimeError(f"Command {' '.join(cmd)} failed: {p.stderr}")
+              return p.stdout
 
-def get_duration(path):
-    try:
-        out = run(["ffprobe","-v","error","-show_entries","format=duration","-of","default=noprint_wrappers=1:nokey=1", str(path)])
-        return float(out.strip())
-    except Exception:
-        return 0.0
+          def get_duration(path):
+              try:
+                  out = run(["ffprobe","-v","error","-show_entries","format=duration","-of","default=noprint_wrappers=1:nokey=1", str(path)])
+                  return float(out.strip())
+              except Exception:
+                  return 0.0
 
-# Transcribe with local whisper
-model_name = os.environ.get("WHISPER_MODEL","tiny")
-print(f"Loading whisper model: {model_name}")
-import whisper
-model = whisper.load_model(model_name)
-print("Transcribing... (this may take a while)")
-result = model.transcribe(str(video))
-segments = result.get("segments", [])
-print(f"Transcription segments: {len(segments)}")
+          # Transcribe with local whisper
+          model_name = os.environ.get("WHISPER_MODEL","tiny")
+          print(f"Loading whisper model: {model_name}")
+          import whisper
+          model = whisper.load_model(model_name)
+          print("Transcribing... (this may take a while)")
+          result = model.transcribe(str(video))
+          segments = result.get("segments", [])
+          print(f"Transcription segments: {len(segments)}")
 
-# Scene detection (try scenedetect; fallback to fixed windows)
-scenes = []
-try:
-    from scenedetect import VideoManager, SceneManager
-    from scenedetect.detectors import ContentDetector
-    vm = VideoManager([str(video)])
-    sm = SceneManager()
-    sm.add_detector(ContentDetector(threshold=30.0))
-    vm.start()
-    sm.detect_scenes(frame_source=vm)
-    scene_list = sm.get_scene_list()
-    vm.release()
-    for idx,(s,e) in enumerate(scene_list):
-        scenes.append({"start": s.get_seconds(), "end": e.get_seconds(), "scene_id": idx})
-    if not scenes:
-        scenes = [{"start":0.0, "end": get_duration(video), "scene_id":0}]
-except Exception as e:
-    dur = get_duration(video)
-    win = 10.0
-    t = 0.0
-    idx = 0
-    while t < dur:
-        scenes.append({"start": t, "end": min(dur, t+win), "scene_id": idx})
-        idx += 1
-        t += win
+          # Scene detection (try scenedetect; fallback to fixed windows)
+          scenes = []
+          try:
+              from scenedetect import VideoManager, SceneManager
+              from scenedetect.detectors import ContentDetector
+              vm = VideoManager([str(video)])
+              sm = SceneManager()
+              sm.add_detector(ContentDetector(threshold=30.0))
+              vm.start()
+              sm.detect_scenes(frame_source=vm)
+              scene_list = sm.get_scene_list()
+              vm.release()
+              for idx,(s,e) in enumerate(scene_list):
+                  scenes.append({"start": s.get_seconds(), "end": e.get_seconds(), "scene_id": idx})
+              if not scenes:
+                  scenes = [{"start":0.0, "end": get_duration(video), "scene_id":0}]
+          except Exception as e:
+              dur = get_duration(video)
+              win = 10.0
+              t = 0.0
+              idx = 0
+              while t < dur:
+                  scenes.append({"start": t, "end": min(dur, t+win), "scene_id": idx})
+                  idx += 1
+                  t += win
 
-def score_text_segment(text):
-    if not text: return 0.0
-    txt = text.lower()
-    keywords = ["wow","amazing","unbelievable","incredible","shocking","surprise","applause","laugh","lol","!","?","shout","scream"]
-    s = 0.0
-    for k in keywords:
-        if k in txt:
-            s += 1.5
-    words = len(txt.split())
-    s += min(3.0, math.log1p(words))
-    return s
+          def score_text_segment(text):
+              if not text: return 0.0
+              txt = text.lower()
+              keywords = ["wow","amazing","unbelievable","incredible","shocking","surprise","applause","laugh","lol","!","?","shout","scream"]
+              s = 0.0
+              for k in keywords:
+                  if k in txt:
+                      s += 1.5
+              words = len(txt.split())
+              s += min(3.0, math.log1p(words))
+              return s
 
-# Build proposals from transcript segments
-proposals = []
-min_d = float(os.environ.get("MIN_DURATION","6"))
-max_d = float(os.environ.get("MAX_DURATION","30"))
-for seg in segments:
-    s0 = seg.get("start",0.0)
-    e0 = seg.get("end", s0 + max_d)
-    dur = e0 - s0
-    if dur <= 0:
-        dur = min_d
-        e0 = s0 + dur
-    expand = min(2.0, (max_d - dur)/2.0)
-    s = max(0.0, s0 - expand)
-    e = min(e0 + expand, s + max_d)
-    if e - s < min_d:
-        e = s + min_d
-    text_score = score_text_segment(seg.get("text",""))
-    scene_bonus = 0.0
-    for sc in scenes:
-        if seg.get("start",0) < sc["end"] and seg.get("end",0) >= sc["end"] - 1.0:
-            scene_bonus += 1.0
-    total = text_score + scene_bonus
-    proposals.append({"start": s, "end": e, "score": total, "text": seg.get("text","")})
+          # Build proposals from transcript segments
+          proposals = []
+          min_d = float(os.environ.get("MIN_DURATION","6"))
+          max_d = float(os.environ.get("MAX_DURATION","30"))
+          for seg in segments:
+              s0 = seg.get("start",0.0)
+              e0 = seg.get("end", s0 + max_d)
+              dur = e0 - s0
+              if dur <= 0:
+                  dur = min_d
+                  e0 = s0 + dur
+              expand = min(2.0, (max_d - dur)/2.0)
+              s = max(0.0, s0 - expand)
+              e = min(e0 + expand, s + max_d)
+              if e - s < min_d:
+                  e = s + min_d
+              text_score = score_text_segment(seg.get("text",""))
+              scene_bonus = 0.0
+              for sc in scenes:
+                  if seg.get("start",0) < sc["end"] and seg.get("end",0) >= sc["end"] - 1.0:
+                      scene_bonus += 1.0
+              total = text_score + scene_bonus
+              proposals.append({"start": s, "end": e, "score": total, "text": seg.get("text","")})
 
-# fallback fixed windows if no proposals
-if not proposals:
-    dur = get_duration(video)
-    t = 0.0
-    while t < dur:
-        proposals.append({"start": t, "end": min(dur, t+max_d), "score":1.0, "text":""})
-        t += max_d
+          # fallback fixed windows if no proposals
+          if not proposals:
+              dur = get_duration(video)
+              t = 0.0
+              while t < dur:
+                  proposals.append({"start": t, "end": min(dur, t+max_d), "score":1.0, "text":""})
+                  t += max_d
 
-# select top non-overlapping proposals
-proposals_sorted = sorted(proposals, key=lambda x: x["score"], reverse=True)
-selected = []
-occupied = []
-num_short = int(os.environ.get("NUM_SHORTS","6"))
-for p in proposals_sorted:
-    if len(selected) >= num_short: break
-    s,e = p["start"], p["end"]
-    overlap = False
-    for o in occupied:
-        if not (e <= o[0] or s >= o[1]):
-            overlap = True; break
-    if not overlap:
-        selected.append(p)
-        occupied.append((s,e))
+          # select top non-overlapping proposals
+          proposals_sorted = sorted(proposals, key=lambda x: x["score"], reverse=True)
+          selected = []
+          occupied = []
+          num_short = int(os.environ.get("NUM_SHORTS","6"))
+          for p in proposals_sorted:
+              if len(selected) >= num_short: break
+              s,e = p["start"], p["end"]
+              overlap = False
+              for o in occupied:
+                  if not (e <= o[0] or s >= o[1]):
+                      overlap = True; break
+              if not overlap:
+                  selected.append(p)
+                  occupied.append((s,e))
 
-# ensure selected count
-if len(selected) < num_short:
-    # append further windows from timeline
-    dur = get_duration(video)
-    t = 0.0
-    idx = 0
-    while len(selected) < num_short and t < dur:
-        s = t; e = min(dur, t + max_d)
-        # avoid overlap
-        ok = True
-        for o in occupied:
-            if not (e <= o[0] or s >= o[1]):
-                ok = False; break
-        if ok:
-            selected.append({"start":s,"end":e,"score":0.0,"text":""})
-            occupied.append((s,e))
-        t = e
-        idx += 1
+          # ensure selected count
+          if len(selected) < num_short:
+              # append further windows from timeline
+              dur = get_duration(video)
+              t = 0.0
+              idx = 0
+              while len(selected) < num_short and t < dur:
+                  s = t; e = min(dur, t + max_d)
+                  # avoid overlap
+                  ok = True
+                  for o in occupied:
+                      if not (e <= o[0] or s >= o[1]):
+                          ok = False; break
+                  if ok:
+                      selected.append({"start":s,"end":e,"score":0.0,"text":""})
+                      occupied.append((s,e))
+                  t = e
+                  idx += 1
 
-# cut clips with ffmpeg
-import shlex
-OUT = Path("output")
-CLIPS_DIR = OUT / "clips"
-CLIPS_DIR.mkdir(parents=True, exist_ok=True)
-results = []
-for i,p in enumerate(selected):
-    s = p["start"]; e = p["end"]; dur = e - s
-    fname = f"clip_{i:02d}_{int(round(s))}-{int(round(e))}.mp4"
-    outp = CLIPS_DIR / fname
-    cmd = ["ffmpeg","-y","-ss",str(s),"-i",str(video),"-t",str(dur),"-c","copy", str(outp)]
-    print("Running ffmpeg:", " ".join(cmd))
-    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    if proc.returncode != 0:
-        # fallback re-encode
-        cmd2 = ["ffmpeg","-y","-ss",str(s),"-i",str(video),"-t",str(dur),"-c:v","libx264","-c:a","aac", str(outp)]
-        subprocess.run(cmd2, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    results.append({"idx": i, "start": round(s,3), "end": round(e,3), "duration": round(dur,3), "score": p.get("score",0.0), "text": p.get("text",""), "path": str(outp.resolve())})
+          # cut clips with ffmpeg
+          import shlex
+          OUT = Path("output")
+          CLIPS_DIR = OUT / "clips"
+          CLIPS_DIR.mkdir(parents=True, exist_ok=True)
+          results = []
+          for i,p in enumerate(selected):
+              s = p["start"]; e = p["end"]; dur = e - s
+              fname = f"clip_{i:02d}_{int(round(s))}-{int(round(e))}.mp4"
+              outp = CLIPS_DIR / fname
+              cmd = ["ffmpeg","-y","-ss",str(s),"-i",str(video),"-t",str(dur),"-c","copy", str(outp)]
+              print("Running ffmpeg:", " ".join(cmd))
+              proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+              if proc.returncode != 0:
+                  # fallback re-encode
+                  cmd2 = ["ffmpeg","-y","-ss",str(s),"-i",str(video),"-t",str(dur),"-c:v","libx264","-c:a","aac", str(outp)]
+                  subprocess.run(cmd2, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+              results.append({"idx": i, "start": round(s,3), "end": round(e,3), "duration": round(dur,3), "score": p.get("score",0.0), "text": p.get("text",""), "path": str(outp.resolve())})
 
-# write data.json
-data = {
-    "source": str(video.resolve()),
-    "duration": get_duration(video),
-    "num_clips": len(results),
-    "clips": results,
-    "transcripts_count": len(segments),
-    "scenes_count": len(scenes),
-}
-with open("output/data.json","w",encoding="utf-8") as f:
-    json.dump(data, f, indent=2, ensure_ascii=False)
+          # write data.json
+          data = {
+              "source": str(video.resolve()),
+              "duration": get_duration(video),
+              "num_clips": len(results),
+              "clips": results,
+              "transcripts_count": len(segments),
+              "scenes_count": len(scenes),
+          }
+          with open("output/data.json","w",encoding="utf-8") as f:
+              json.dump(data, f, indent=2, ensure_ascii=False)
 
-print("Wrote output/data.json")
-PY
+          print("Wrote output/data.json")
+          PY
 
           # create zip for artifact
           zip -r output.zip output
-
-      - name: Upload artifact (output.zip)
-        uses: actions/upload-artifact@v4
-        with:
-          name: viral-shorts-output
-          path: output.zip
