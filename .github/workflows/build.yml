@@ -56,7 +56,7 @@ jobs:
             ffmpeg \
             libsm6 \
             libxext6 \
-            libgl1-mesa-glx \
+            libgl1 \
             git \
             wget \
             curl
