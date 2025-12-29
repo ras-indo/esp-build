@@ -1,4 +1,4 @@
-name: 🎬 AI Director Ultra (Fixed Download Issue)
+name: 🎬 AI Director Ultra (Fixed Whisper Issue)
 
 on:
   workflow_dispatch:
@@ -6,11 +6,11 @@ on:
       video_url:
         description: 'URL Video MP4/YouTube'
         required: true
-        default: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'  # Contoh URL YouTube
+        default: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'
       num_shorts:
         description: 'Target Jumlah Klip'
         required: false
-        default: '5'
+        default: '3'
       platform:
         description: 'Platform Target'
         required: false
@@ -59,13 +59,17 @@ jobs:
             libgl1-mesa-glx \
             git \
             wget \
-            curl \
-            jq \
-            python3-pip
+            curl
           
-      - name: 📦 Install Python Packages
+      - name: 📦 Install Python Packages (Fixed Whisper)
         run: |
           python -m pip install --upgrade pip
+          
+          # Install Whisper correctly from GitHub
+          pip install git+https://github.com/openai/whisper.git
+          
+          # Install PyTorch with CPU-only
+          pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
           
           # Core AI/ML
           pip install openai==1.12.0
@@ -73,9 +77,9 @@ jobs:
           pip install langchain-openai==0.0.8
           
           # Audio/Video Processing
-          pip install whisper==1.1.10
           pip install yt-dlp==2024.4.9
           pip install ffmpeg-python==0.2.0
+          pip install pydub==0.25.1
           
           # Utilities
           pip install numpy==1.26.4
@@ -85,16 +89,16 @@ jobs:
           pip install colorama==0.4.6
           pip install tenacity==8.2.3
           
-      - name: 🚀 Run AI Director Ultra
+      - name: 🚀 Run AI Director Ultra (Simplified)
         env:
           OPENAI_API_KEY: "Kontolondon"
           OPENAI_API_BASE: "https://tes-coral.vercel.app/v1/"
           VIDEO_URL: ${{ github.event.inputs.video_url }}
-          NUM_SHORTS: ${{ github.event.inputs.num_shorts || 5 }}
+          NUM_SHORTS: ${{ github.event.inputs.num_shorts || 3 }}
           TARGET_PLATFORM: ${{ github.event.inputs.platform || 'tiktok' }}
           QUALITY_PRESET: ${{ github.event.inputs.quality || 'balanced' }}
         run: |
-          cat > ai_director_ultra.py << 'EOF'
+          cat > ai_director_simple.py << 'EOF'
           import os
           import sys
           import json
@@ -109,421 +113,215 @@ jobs:
           import whisper
           import torch
           from tqdm import tqdm
-          import colorama
-          from colorama import Fore, Style
-          from tenacity import retry, stop_after_attempt, wait_exponential
           
           # LangChain imports
           from langchain_openai import ChatOpenAI
           from langchain_core.prompts import ChatPromptTemplate
           from langchain_core.output_parsers import JsonOutputParser
           
-          colorama.init(autoreset=True)
-          
+          # Setup logging
           logging.basicConfig(
               level=logging.INFO,
-              format=f'{Fore.CYAN}%(asctime)s{Style.RESET_ALL} - {Fore.GREEN}%(levelname)s{Style.RESET_ALL} - %(message)s',
-              handlers=[logging.StreamHandler()]
+              format='%(asctime)s - %(levelname)s - %(message)s'
           )
           logger = logging.getLogger(__name__)
           
           # Configuration
-          class Config:
-              def __init__(self):
-                  self.OPENAI_API_KEY = "Kontolondon"
-                  self.OPENAI_API_BASE = "https://tes-coral.vercel.app/v1/"
-                  self.GPT_MODEL = "gpt-4"
-                  self.WHISPER_MODEL = "medium"
-                  
-                  self.VIDEO_URL = os.getenv("VIDEO_URL", "")
-                  self.NUM_SHORTS = int(os.getenv("NUM_SHORTS", 5))
-                  self.TARGET_PLATFORM = os.getenv("TARGET_PLATFORM", "tiktok")
-                  self.QUALITY_PRESET = os.getenv("QUALITY_PRESET", "balanced")
-                  
-                  self.WORKDIR = Path("workspace")
-                  self.OUTDIR = Path("output")
-                  
-                  self.WORKDIR.mkdir(exist_ok=True)
-                  self.OUTDIR.mkdir(exist_ok=True)
-                  
-                  if not self.VIDEO_URL:
-                      raise ValueError("VIDEO_URL is required!")
+          VIDEO_URL = os.getenv("VIDEO_URL", "")
+          NUM_SHORTS = int(os.getenv("NUM_SHORTS", 3))
+          OPENAI_API_KEY = "Kontolondon"
+          OPENAI_API_BASE = "https://tes-coral.vercel.app/v1/"
           
-          config = Config()
+          WORKDIR = Path("workspace")
+          OUTDIR = Path("output")
+          WORKDIR.mkdir(exist_ok=True)
+          OUTDIR.mkdir(exist_ok=True)
           
-          # ========== VIDEO DOWNLOADER ==========
-          class VideoDownloader:
-              def __init__(self):
-                  self.video_path = config.WORKDIR / "source_video.mp4"
-                  
-              @retry(
-                  stop=stop_after_attempt(3),
-                  wait=wait_exponential(multiplier=2, min=4, max=10)
-              )
-              def download(self) -> Path:
-                  """Download video with multiple strategies"""
-                  logger.info(f"{Fore.CYAN}⬇️ Downloading video from: {config.VIDEO_URL}{Style.RESET_ALL}")
-                  
-                  # Strategy 1: Try yt-dlp (best for YouTube, TikTok, etc)
-                  if self._download_with_ytdlp():
-                      return self.video_path
-                  
-                  # Strategy 2: Try direct download if it looks like a direct MP4 URL
-                  if config.VIDEO_URL.endswith('.mp4') or 'mp4' in config.VIDEO_URL.lower():
-                      if self._download_direct():
-                          return self.video_path
-                  
-                  # Strategy 3: Try with curl with proper headers
-                  if self._download_with_curl():
-                      return self.video_path
-                  
-                  raise ValueError(f"Failed to download video from {config.VIDEO_URL}")
+          def download_video():
+              """Download video using yt-dlp"""
+              video_path = WORKDIR / "source_video.mp4"
               
-              def _download_with_ytdlp(self) -> bool:
-                  """Download using yt-dlp"""
-                  try:
-                      import yt_dlp
-                      
-                      ydl_opts = {
-                          'format': 'best[ext=mp4]/best',
-                          'outtmpl': str(self.video_path.with_suffix('.%(ext)s')),
-                          'quiet': True,
-                          'no_warnings': True,
-                          'extract_flat': False,
-                          'http_headers': {
-                              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                              'Accept': '*/*',
-                              'Accept-Language': 'en-US,en;q=0.9',
-                              'Accept-Encoding': 'gzip, deflate, br',
-                              'DNT': '1',
-                              'Connection': 'keep-alive',
-                              'Upgrade-Insecure-Requests': '1',
-                              'Sec-Fetch-Dest': 'video',
-                              'Sec-Fetch-Mode': 'navigate',
-                              'Sec-Fetch-Site': 'cross-site',
-                              'Pragma': 'no-cache',
-                              'Cache-Control': 'no-cache'
-                          }
+              logger.info(f"📥 Downloading video from: {VIDEO_URL}")
+              
+              try:
+                  import yt_dlp
+                  
+                  ydl_opts = {
+                      'format': 'best[ext=mp4]/best',
+                      'outtmpl': str(video_path.with_suffix('.%(ext)s')),
+                      'quiet': True,
+                      'no_warnings': True,
+                      'http_headers': {
+                          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
                       }
-                      
-                      with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                          # Extract info first to check
-                          info = ydl.extract_info(config.VIDEO_URL, download=False)
-                          if info:
-                              logger.info(f"{Fore.GREEN}✅ Found video: {info.get('title', 'Unknown')}{Style.RESET_ALL}")
-                              logger.info(f"   Duration: {info.get('duration', 0)}s")
-                              logger.info(f"   Size: {info.get('filesize', 0) / (1024*1024):.2f} MB")
-                              
-                              # Now download
-                              ydl.download([config.VIDEO_URL])
-                              
-                              # Find the actual downloaded file
-                              for ext in ['.mp4', '.mkv', '.webm']:
-                                  if self.video_path.with_suffix(ext).exists():
-                                      actual_file = self.video_path.with_suffix(ext)
-                                      if ext != '.mp4':
-                                          # Convert to mp4
-                                          subprocess.run([
-                                              'ffmpeg', '-i', str(actual_file),
-                                              '-c:v', 'copy', '-c:a', 'copy',
-                                              str(self.video_path)
-                                          ], check=True, capture_output=True)
-                                      else:
-                                          self.video_path = actual_file
-                                      
-                                      if self._validate_video_file():
-                                          return True
-                      
-                      return False
-                      
-                  except Exception as e:
-                      logger.warning(f"yt-dlp failed: {e}")
-                      return False
-              
-              def _download_direct(self) -> bool:
-                  """Direct download for MP4 URLs"""
-                  try:
-                      import requests
-                      
-                      headers = {
-                          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                          'Accept': 'video/mp4,video/*;q=0.9,*/*;q=0.8',
-                          'Accept-Language': 'en-US,en;q=0.9',
-                          'Range': 'bytes=0-10000000',  # First 10MB to check
-                          'Referer': 'https://www.google.com/'
-                      }
-                      
-                      # First, check if it's a video
-                      response = requests.get(config.VIDEO_URL, headers=headers, stream=True, timeout=30)
-                      response.raise_for_status()
-                      
-                      content_type = response.headers.get('content-type', '')
-                      content_length = response.headers.get('content-length', '0')
-                      
-                      logger.info(f"Content-Type: {content_type}")
-                      logger.info(f"Content-Length: {content_length}")
-                      
-                      if 'video' in content_type or 'mp4' in content_type:
-                          # Now download full video
-                          logger.info(f"{Fore.YELLOW}📥 Downloading video directly...{Style.RESET_ALL}")
-                          
-                          response = requests.get(config.VIDEO_URL, headers=headers, stream=True, timeout=300)
-                          response.raise_for_status()
-                          
-                          total_size = int(response.headers.get('content-length', 0))
-                          
-                          with open(self.video_path, 'wb') as f:
-                              for chunk in tqdm(response.iter_content(chunk_size=8192), 
-                                               total=total_size//8192, 
-                                               unit='KB', 
-                                               desc='Downloading'):
-                                  if chunk:
-                                      f.write(chunk)
-                          
-                          if self._validate_video_file():
-                              return True
-                      
-                      return False
-                      
-                  except Exception as e:
-                      logger.warning(f"Direct download failed: {e}")
-                      return False
-              
-              def _download_with_curl(self) -> bool:
-                  """Download using curl with headers"""
-                  try:
-                      curl_cmd = [
-                          'curl', '-L',
-                          '-H', 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                          '-H', 'Accept: video/mp4,video/*;q=0.9,*/*;q=0.8',
-                          '-H', 'Accept-Language: en-US,en;q=0.9',
-                          '-H', 'Referer: https://www.google.com/',
-                          '--compressed',
-                          '--connect-timeout', '30',
-                          '--max-time', '300',
-                          '--retry', '3',
-                          '--retry-delay', '5',
-                          '-o', str(self.video_path),
-                          config.VIDEO_URL
-                      ]
-                      
-                      logger.info(f"{Fore.YELLOW}🔄 Trying curl download...{Style.RESET_ALL}")
-                      
-                      result = subprocess.run(
-                          curl_cmd,
-                          capture_output=True,
-                          text=True,
-                          timeout=300
-                      )
-                      
-                      if result.returncode == 0:
-                          if self._validate_video_file():
-                              return True
-                      else:
-                          logger.warning(f"Curl failed: {result.stderr[:200]}")
-                      
-                      return False
-                      
-                  except Exception as e:
-                      logger.warning(f"Curl download failed: {e}")
-                      return False
-              
-              def _validate_video_file(self) -> bool:
-                  """Validate downloaded video file"""
-                  if not self.video_path.exists():
-                      return False
+                  }
                   
-                  file_size = self.video_path.stat().st_size
-                  logger.info(f"File size: {file_size / (1024*1024):.2f} MB")
-                  
-                  # Check if file is too small (likely not a video)
-                  if file_size < 1024 * 100:  # Less than 100KB
-                      logger.error(f"{Fore.RED}❌ File too small ({file_size} bytes), likely not a video{Style.RESET_ALL}")
-                      return False
-                  
-                  # Try to get video info with ffprobe
-                  try:
-                      ffprobe_cmd = [
-                          'ffprobe', '-v', 'error',
-                          '-select_streams', 'v:0',
-                          '-show_entries', 'stream=codec_name,duration,width,height',
-                          '-of', 'json',
-                          str(self.video_path)
-                      ]
-                      
-                      result = subprocess.run(
-                          ffprobe_cmd,
-                          capture_output=True,
-                          text=True,
-                          timeout=10
-                      )
-                      
-                      if result.returncode == 0:
-                          video_info = json.loads(result.stdout)
-                          streams = video_info.get('streams', [])
+                  with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                      info = ydl.extract_info(VIDEO_URL, download=False)
+                      if info:
+                          logger.info(f"🎬 Video info: {info.get('title', 'Unknown')}")
+                          logger.info(f"   Duration: {info.get('duration', 0)} seconds")
                           
-                          if streams:
-                              stream = streams[0]
-                              logger.info(f"{Fore.GREEN}✅ Video validated:{Style.RESET_ALL}")
-                              logger.info(f"   Codec: {stream.get('codec_name')}")
-                              logger.info(f"   Duration: {float(stream.get('duration', 0)):.1f}s")
-                              logger.info(f"   Resolution: {stream.get('width')}x{stream.get('height')}")
-                              return True
-                      else:
-                          logger.warning(f"FFprobe failed: {result.stderr[:200]}")
-                          
-                  except Exception as e:
-                      logger.warning(f"Video validation failed: {e}")
+                      ydl.download([VIDEO_URL])
                       
-                  # Fallback: check file extension and size
-                  if file_size > 1024 * 1024:  # More than 1MB
-                      return True
+                  # Find downloaded file
+                  for ext in ['.mp4', '.mkv', '.webm']:
+                      if video_path.with_suffix(ext).exists():
+                          actual_file = video_path.with_suffix(ext)
+                          if ext != '.mp4':
+                              # Convert to mp4
+                              subprocess.run([
+                                  'ffmpeg', '-i', str(actual_file),
+                                  '-c:v', 'copy', '-c:a', 'copy',
+                                  str(video_path)
+                              ], capture_output=True)
+                          else:
+                              video_path = actual_file
+                          break
                   
-                  return False
+                  if video_path.exists() and video_path.stat().st_size > 1024 * 1024:
+                      logger.info(f"✅ Downloaded: {video_path.stat().st_size / (1024*1024):.2f} MB")
+                      return video_path
+                  else:
+                      raise ValueError("Download failed or file too small")
+                      
+              except Exception as e:
+                  logger.error(f"❌ Download failed: {e}")
+                  raise
           
-          # ========== AUDIO TRANSCRIBER ==========
-          class AudioTranscriber:
-              def __init__(self):
-                  self.device = "cuda" if torch.cuda.is_available() else "cpu"
+          def transcribe_audio(video_path: Path):
+              """Transcribe audio using Whisper"""
+              logger.info("🎤 Transcribing audio with Whisper Medium...")
+              
+              try:
+                  # Check device
+                  device = "cuda" if torch.cuda.is_available() else "cpu"
+                  logger.info(f"Using device: {device}")
                   
-              def transcribe(self, video_path: Path) -> List[Dict]:
-                  logger.info(f"{Fore.CYAN}👂 Transcribing with Whisper Medium ({self.device})...{Style.RESET_ALL}")
+                  # Load model
+                  model = whisper.load_model("medium")
                   
-                  try:
-                      model = whisper.load_model("medium", device=self.device)
-                      
-                      result = model.transcribe(
-                          str(video_path),
-                          fp16=(self.device == "cuda"),
-                          verbose=False,
-                          language=None,
-                          task="transcribe"
-                      )
-                      
-                      segments = []
-                      for seg in result.get("segments", []):
-                          segments.append({
-                              'start': float(seg['start']),
-                              'end': float(seg['end']),
-                              'text': seg['text'].strip(),
-                              'duration': float(seg['end'] - seg['start'])
-                          })
-                      
-                      logger.info(f"{Fore.GREEN}✅ Transcription complete: {len(segments)} segments{Style.RESET_ALL}")
-                      return segments
-                      
-                  except Exception as e:
-                      logger.error(f"{Fore.RED}❌ Transcription failed: {e}{Style.RESET_ALL}")
-                      raise
-          
-          # ========== AI DIRECTOR ==========
-          class AIDirector:
-              @retry(
-                  stop=stop_after_attempt(5),
-                  wait=wait_exponential(multiplier=2, min=4, max=60)
-              )
-              def analyze_and_select_clips(self, segments: List[Dict]) -> List[Dict]:
-                  logger.info(f"{Fore.CYAN}🧠 AI Director analyzing with GPT-4...{Style.RESET_ALL}")
-                  
-                  # Prepare transcript
-                  transcript = ""
-                  for i, seg in enumerate(segments[:50]):  # Limit to 50 segments
-                      start_min = int(seg['start'] // 60)
-                      start_sec = int(seg['start'] % 60)
-                      transcript += f"[{start_min:02d}:{start_sec:02d}] {seg['text']}\\n"
-                  
-                  # Initialize LLM
-                  llm = ChatOpenAI(
-                      model="gpt-4",
-                      temperature=0.2,
-                      openai_api_key=config.OPENAI_API_KEY,
-                      openai_api_base=config.OPENAI_API_BASE,
-                      timeout=120,
-                      max_retries=5
+                  # Transcribe
+                  result = model.transcribe(
+                      str(video_path),
+                      fp16=(device == "cuda"),
+                      verbose=False
                   )
                   
-                  parser = JsonOutputParser()
+                  segments = []
+                  for seg in result.get("segments", []):
+                      segments.append({
+                          'start': float(seg['start']),
+                          'end': float(seg['end']),
+                          'text': seg['text'].strip(),
+                          'duration': float(seg['end'] - seg['start'])
+                      })
                   
-                  prompt = ChatPromptTemplate.from_template("""
-                  Anda adalah AI Director yang ahli dalam konten viral.
+                  logger.info(f"✅ Transcription complete: {len(segments)} segments")
+                  return segments
                   
-                  Tugas: Pilih {num_clips} klip terbaik dari transkrip video.
-                  
-                  TRANSCRIPT:
-                  {transcript}
-                  
-                  INSTRUKSI:
-                  1. Cari momen dengan emosi kuat (terkejut, senang, marah, sedih)
-                  2. Pilih klip yang berdiri sendiri (self-contained)
-                  3. Durasi ideal 8-30 detik
-                  4. Hindari potongan kata
-                  5. Berikan judul clickbait
-                  
-                  FORMAT OUTPUT (JSON array):
-                  [
-                    {{
-                      "start_time": 45.2,
-                      "end_time": 60.5,
-                      "title": "Judul menarik",
-                      "viral_score": 85,
-                      "reason": "Alasan kenapa viral"
-                    }}
-                  ]
-                  
-                  Pastikan output HANYA JSON.
-                  """)
-                  
-                  messages = prompt.format_messages(
-                      num_clips=config.NUM_SHORTS,
-                      transcript=transcript[:8000]  # Limit size
-                  )
-                  
-                  try:
-                      response = llm.invoke(messages)
-                      
-                      # Parse response
-                      content = response.content.strip()
-                      
-                      # Try to extract JSON if there's extra text
-                      json_match = re.search(r'\[.*\]', content, re.DOTALL)
-                      if json_match:
-                          clips = json.loads(json_match.group())
-                      else:
-                          clips = json.loads(content)
-                      
-                      # Validate clips
-                      valid_clips = []
-                      for i, clip in enumerate(clips):
-                          try:
-                              start = float(clip['start_time'])
-                              end = float(clip['end_time'])
-                              duration = end - start
-                              
-                              if 5 <= duration <= 60:  # Reasonable duration
-                                  clip['clip_id'] = f"clip_{i+1:03d}"
-                                  valid_clips.append(clip)
-                          except (KeyError, ValueError):
-                              continue
-                      
-                      logger.info(f"{Fore.GREEN}✅ AI selected {len(valid_clips)} clips{Style.RESET_ALL}")
-                      return valid_clips[:config.NUM_SHORTS]
-                      
-                  except Exception as e:
-                      logger.error(f"{Fore.RED}❌ AI analysis failed: {e}{Style.RESET_ALL}")
-                      # Generate fallback clips
-                      return self._generate_fallback_clips(segments)
+              except Exception as e:
+                  logger.error(f"❌ Transcription failed: {e}")
+                  raise
+          
+          def analyze_with_gpt(segments: List[Dict]):
+              """Analyze content with GPT-4"""
+              logger.info("🧠 Analyzing with GPT-4...")
               
-              def _generate_fallback_clips(self, segments: List[Dict]) -> List[Dict]:
-                  """Generate simple fallback clips"""
-                  logger.warning(f"{Fore.YELLOW}⚠️ Using fallback clip generation{Style.RESET_ALL}")
+              # Prepare transcript
+              transcript = ""
+              for i, seg in enumerate(segments[:30]):  # Limit to 30 segments
+                  start_min = int(seg['start'] // 60)
+                  start_sec = int(seg['start'] % 60)
+                  transcript += f"[{start_min:02d}:{start_sec:02d}] {seg['text']}\\n"
+              
+              # Initialize LLM
+              llm = ChatOpenAI(
+                  model="gpt-4",
+                  temperature=0.2,
+                  openai_api_key=OPENAI_API_KEY,
+                  openai_api_base=OPENAI_API_BASE,
+                  timeout=60,
+                  max_retries=5
+              )
+              
+              parser = JsonOutputParser()
+              
+              prompt = ChatPromptTemplate.from_template("""
+              Anda adalah AI Director yang ahli dalam konten viral.
+              
+              Tugas: Pilih {num_clips} klip terbaik dari transkrip video.
+              
+              TRANSCRIPT:
+              {transcript}
+              
+              INSTRUKSI:
+              1. Cari momen dengan emosi kuat
+              2. Durasi ideal 8-30 detik
+              3. Hindari potongan kata
+              4. Berikan judul clickbait
+              
+              FORMAT OUTPUT (JSON array):
+              [
+                {{
+                  "start_time": 45.2,
+                  "end_time": 60.5,
+                  "title": "Judul menarik",
+                  "viral_score": 85
+                }}
+              ]
+              """)
+              
+              messages = prompt.format_messages(
+                  num_clips=NUM_SHORTS,
+                  transcript=transcript[:5000]
+              )
+              
+              try:
+                  response = llm.invoke(messages)
                   
-                  clips = []
-                  if segments:
-                      # Take first few segments
-                      for i in range(min(config.NUM_SHORTS, len(segments))):
-                          seg = segments[i]
+                  # Parse JSON
+                  content = response.content.strip()
+                  json_match = re.search(r'\[.*\]', content, re.DOTALL)
+                  if json_match:
+                      clips = json.loads(json_match.group())
+                  else:
+                      clips = json.loads(content)
+                  
+                  # Validate and add IDs
+                  valid_clips = []
+                  for i, clip in enumerate(clips):
+                      try:
+                          start = float(clip['start_time'])
+                          end = float(clip['end_time'])
+                          if 5 <= (end - start) <= 60:
+                              clip['clip_id'] = f"clip_{i+1:03d}"
+                              clip['duration'] = end - start
+                              valid_clips.append(clip)
+                      except (KeyError, ValueError):
+                          continue
+                  
+                  logger.info(f"✅ AI selected {len(valid_clips)} clips")
+                  return valid_clips[:NUM_SHORTS]
+                  
+              except Exception as e:
+                  logger.error(f"❌ AI analysis failed: {e}")
+                  # Generate simple fallback clips
+                  return generate_fallback_clips(segments)
+          
+          def generate_fallback_clips(segments: List[Dict]):
+              """Generate simple fallback clips"""
+              clips = []
+              
+              if segments:
+                  # Take segments at intervals
+                  interval = max(1, len(segments) // NUM_SHORTS)
+                  for i in range(min(NUM_SHORTS, len(segments))):
+                      idx = i * interval
+                      if idx < len(segments):
+                          seg = segments[idx]
                           start = seg['start']
-                          end = min(start + 15, seg['end'])
+                          end = min(start + 15, seg['end'] + 5)
                           
                           clips.append({
                               'clip_id': f"fallback_{i+1:03d}",
@@ -531,175 +329,123 @@ jobs:
                               'end_time': end,
                               'title': f"Video Highlight {i+1}",
                               'viral_score': 70,
-                              'reason': 'Auto-generated'
+                              'duration': end - start
                           })
-                  else:
-                      # Create artificial clips
-                      for i in range(config.NUM_SHORTS):
-                          clips.append({
-                              'clip_id': f"fallback_{i+1:03d}",
-                              'start_time': i * 30,
-                              'end_time': (i * 30) + 15,
-                              'title': f"Content Part {i+1}",
-                              'viral_score': 65,
-                              'reason': 'Default clip'
-                          })
-                  
-                  return clips
-          
-          # ========== VIDEO PRODUCER ==========
-          class VideoProducer:
-              def produce_clips(self, video_path: Path, clips: List[Dict]):
-                  logger.info(f"{Fore.CYAN}🎬 Producing {len(clips)} clips...{Style.RESET_ALL}")
-                  
-                  produced_count = 0
-                  for clip in clips:
-                      try:
-                          output_path = self._produce_single_clip(video_path, clip)
-                          if output_path:
-                              produced_count += 1
-                              logger.info(f"{Fore.GREEN}✅ Created: {output_path.name}{Style.RESET_ALL}")
-                      except Exception as e:
-                          logger.error(f"{Fore.RED}❌ Failed to produce clip: {e}{Style.RESET_ALL}")
-                  
-                  logger.info(f"{Fore.GREEN}🎉 Total produced: {produced_count}/{len(clips)}{Style.RESET_ALL}")
+              else:
+                  # Default clips
+                  for i in range(NUM_SHORTS):
+                      clips.append({
+                          'clip_id': f"default_{i+1:03d}",
+                          'start_time': i * 30,
+                          'end_time': (i * 30) + 15,
+                          'title': f"Content Part {i+1}",
+                          'viral_score': 65,
+                          'duration': 15
+                      })
               
-              def _produce_single_clip(self, video_path: Path, clip: Dict) -> Optional[Path]:
-                  """Produce a single video clip"""
+              return clips
+          
+          def create_video_clips(video_path: Path, clips: List[Dict]):
+              """Create video clips from selected segments"""
+              logger.info(f"🎬 Creating {len(clips)} video clips...")
+              
+              created_count = 0
+              for clip in clips:
                   try:
-                      # Create safe filename
-                      safe_title = re.sub(r'[^\w\s-]', '', clip['title'])
-                      safe_title = re.sub(r'[-\s]+', '_', safe_title)
-                      safe_title = safe_title[:50]
-                      
-                      output_filename = f"{safe_title}_{clip['clip_id']}.mp4"
-                      output_path = config.OUTDIR / output_filename
-                      
-                      start = float(clip['start_time'])
-                      end = float(clip['end_time'])
-                      duration = end - start
-                      
-                      # Quality settings
-                      quality_presets = {
-                          'fast': {'preset': 'ultrafast', 'crf': '28'},
-                          'balanced': {'preset': 'fast', 'crf': '23'},
-                          'high': {'preset': 'medium', 'crf': '20'}
-                      }
-                      
-                      preset = quality_presets.get(config.QUALITY_PRESET, quality_presets['balanced'])
-                      
-                      # Build FFmpeg command
-                      cmd = [
-                          'ffmpeg', '-y',
-                          '-ss', str(start),
-                          '-i', str(video_path),
-                          '-t', str(duration),
-                          '-c:v', 'libx264',
-                          '-preset', preset['preset'],
-                          '-crf', preset['crf'],
-                          '-c:a', 'aac',
-                          '-b:a', '128k',
-                          '-movflags', '+faststart',
-                          '-vf', 'scale=1080:1920:force_original_aspect_ratio=increase,crop=iw:ih:0:0',
-                          str(output_path)
-                      ]
-                      
-                      # Run FFmpeg
-                      result = subprocess.run(
-                          cmd,
-                          capture_output=True,
-                          text=True,
-                          timeout=180
-                      )
-                      
-                      if result.returncode != 0:
-                          logger.error(f"FFmpeg error: {result.stderr[:200]}")
-                          return None
-                      
-                      # Save metadata
-                      metadata = {
-                          'clip_info': clip,
-                          'file_info': {
-                              'filename': output_filename,
-                              'size_mb': output_path.stat().st_size / (1024*1024),
-                              'duration': duration
-                          },
-                          'generated_at': datetime.now().isoformat()
-                      }
-                      
-                      metadata_path = output_path.with_suffix('.json')
-                      with open(metadata_path, 'w', encoding='utf-8') as f:
-                          json.dump(metadata, f, indent=2, ensure_ascii=False)
-                      
-                      return output_path
-                      
+                      output_path = create_single_clip(video_path, clip)
+                      if output_path:
+                          created_count += 1
+                          logger.info(f"✅ Created: {output_path.name}")
                   except Exception as e:
-                      logger.error(f"Clip production error: {e}")
-                      return None
-          
-          # ========== MAIN EXECUTION ==========
-          def main():
-              logger.info(f"{Fore.MAGENTA}🚀 AI DIRECTOR ULTRA - STARTING{Style.RESET_ALL}")
+                      logger.error(f"❌ Failed to create clip: {e}")
               
+              logger.info(f"🎉 Created {created_count}/{len(clips)} clips")
+          
+          def create_single_clip(video_path: Path, clip: Dict):
+              """Create a single video clip"""
               try:
-                  # 1. Download video
-                  downloader = VideoDownloader()
-                  video_path = downloader.download()
+                  # Create safe filename
+                  safe_title = re.sub(r'[^\w\s-]', '', clip['title'])
+                  safe_title = re.sub(r'[-\s]+', '_', safe_title)
+                  safe_title = safe_title[:40]
                   
-                  if not video_path.exists() or video_path.stat().st_size < 1024 * 100:
-                      logger.error(f"{Fore.RED}❌ No valid video downloaded{Style.RESET_ALL}")
-                      sys.exit(1)
+                  output_filename = f"{safe_title}_{clip['clip_id']}.mp4"
+                  output_path = OUTDIR / output_filename
                   
-                  # 2. Transcribe audio
-                  transcriber = AudioTranscriber()
-                  segments = transcriber.transcribe(video_path)
+                  start = float(clip['start_time'])
+                  duration = float(clip['duration'])
                   
-                  if not segments:
-                      logger.error(f"{Fore.RED}❌ No audio transcribed{Style.RESET_ALL}")
-                      sys.exit(1)
+                  # Build FFmpeg command
+                  cmd = [
+                      'ffmpeg', '-y',
+                      '-ss', str(start),
+                      '-i', str(video_path),
+                      '-t', str(duration),
+                      '-c:v', 'libx264',
+                      '-preset', 'fast',
+                      '-crf', '23',
+                      '-c:a', 'aac',
+                      '-b:a', '128k',
+                      '-movflags', '+faststart',
+                      '-vf', 'scale=1080:1920:force_original_aspect_ratio=increase,crop=iw:ih:0:0',
+                      str(output_path)
+                  ]
                   
-                  # 3. AI analysis
-                  director = AIDirector()
-                  clips = director.analyze_and_select_clips(segments)
+                  # Run FFmpeg
+                  result = subprocess.run(
+                      cmd,
+                      capture_output=True,
+                      text=True,
+                      timeout=120
+                  )
                   
-                  if not clips:
-                      logger.error(f"{Fore.RED}❌ No clips generated{Style.RESET_ALL}")
-                      sys.exit(1)
+                  if result.returncode != 0:
+                      logger.error(f"FFmpeg error: {result.stderr[:200]}")
+                      return None
                   
-                  # 4. Produce clips
-                  producer = VideoProducer()
-                  producer.produce_clips(video_path, clips)
+                  # Save metadata
+                  metadata = {
+                      'clip_info': clip,
+                      'file_info': {
+                          'filename': output_filename,
+                          'size_mb': output_path.stat().st_size / (1024*1024),
+                          'duration': duration
+                      },
+                      'generated_at': datetime.now().isoformat()
+                  }
                   
-                  # 5. Generate summary
-                  self._generate_summary(clips)
+                  metadata_path = output_path.with_suffix('.json')
+                  with open(metadata_path, 'w', encoding='utf-8') as f:
+                      json.dump(metadata, f, indent=2, ensure_ascii=False)
                   
-                  logger.info(f"{Fore.MAGENTA}🎉 PROCESS COMPLETED SUCCESSFULLY!{Style.RESET_ALL}")
+                  return output_path
                   
               except Exception as e:
-                  logger.error(f"{Fore.RED}❌ FATAL ERROR: {e}{Style.RESET_ALL}")
-                  sys.exit(1)
+                  logger.error(f"Clip creation error: {e}")
+                  return None
           
-          def _generate_summary(clips: List[Dict]):
+          def generate_summary(clips: List[Dict]):
               """Generate summary report"""
+              summary_path = OUTDIR / 'summary.json'
+              md_path = OUTDIR / 'SUMMARY.md'
+              
               summary = {
                   'total_clips': len(clips),
-                  'platform': config.TARGET_PLATFORM,
-                  'quality': config.QUALITY_PRESET,
+                  'platform': os.getenv("TARGET_PLATFORM", "tiktok"),
+                  'quality': os.getenv("QUALITY_PRESET", "balanced"),
                   'generated_at': datetime.now().isoformat(),
                   'clips': clips
               }
               
-              summary_path = config.OUTDIR / 'summary.json'
               with open(summary_path, 'w', encoding='utf-8') as f:
                   json.dump(summary, f, indent=2, ensure_ascii=False)
               
-              # Also create markdown summary
-              md_path = config.OUTDIR / 'SUMMARY.md'
+              # Create markdown summary
               with open(md_path, 'w', encoding='utf-8') as f:
                   f.write("# 🎬 AI Director Ultra - Production Summary\n\n")
                   f.write(f"- **Total Clips**: {len(clips)}\n")
-                  f.write(f"- **Platform**: {config.TARGET_PLATFORM}\n")
-                  f.write(f"- **Quality**: {config.QUALITY_PRESET}\n")
+                  f.write(f"- **Platform**: {summary['platform']}\n")
+                  f.write(f"- **Quality**: {summary['quality']}\n")
                   f.write(f"- **Generated**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
                   
                   f.write("## Generated Clips\n")
@@ -707,29 +453,60 @@ jobs:
                       f.write(f"### {clip['clip_id']}: {clip['title']}\n")
                       f.write(f"- Start: {clip['start_time']:.1f}s\n")
                       f.write(f"- End: {clip['end_time']:.1f}s\n")
-                      f.write(f"- Duration: {clip['end_time'] - clip['start_time']:.1f}s\n")
-                      f.write(f"- Viral Score: {clip.get('viral_score', 'N/A')}/100\n")
-                      f.write(f"- Reason: {clip.get('reason', 'N/A')}\n\n")
+                      f.write(f"- Duration: {clip['duration']:.1f}s\n")
+                      f.write(f"- Viral Score: {clip.get('viral_score', 'N/A')}/100\n\n")
               
-              logger.info(f"{Fore.GREEN}📊 Summary generated in {config.OUTDIR}/{Style.RESET_ALL}")
+              logger.info("📊 Summary generated")
+          
+          def main():
+              """Main execution"""
+              logger.info("🚀 AI Director Ultra - Starting")
+              
+              try:
+                  # 1. Download
+                  video_path = download_video()
+                  
+                  # 2. Transcribe
+                  segments = transcribe_audio(video_path)
+                  
+                  if not segments:
+                      logger.error("❌ No segments transcribed")
+                      return
+                  
+                  # 3. AI Analysis
+                  clips = analyze_with_gpt(segments)
+                  
+                  if not clips:
+                      logger.error("❌ No clips generated")
+                      return
+                  
+                  # 4. Create video clips
+                  create_video_clips(video_path, clips)
+                  
+                  # 5. Generate summary
+                  generate_summary(clips)
+                  
+                  logger.info("🎉 Process completed successfully!")
+                  
+              except Exception as e:
+                  logger.error(f"❌ Fatal error: {e}")
+                  sys.exit(1)
           
           if __name__ == "__main__":
               main()
           EOF
           
-          echo "Running AI Director Ultra..."
-          python ai_director_ultra.py
+          echo "Running AI Director..."
+          python ai_director_simple.py
           
       - name: 📦 Package Output
         run: |
-          echo "📁 Output directory contents:"
+          echo "📁 Output directory:"
           ls -la output/ 2>/dev/null || echo "No output directory"
           
-          if [ -d "output" ]; then
-            # Create archive
+          if [ -d "output" ] && [ "$(ls -A output/ 2>/dev/null)" ]; then
             TIMESTAMP=$(date +%Y%m%d_%H%M%S)
             zip -r "output_$TIMESTAMP.zip" output/
-            
             echo "✅ Output packaged: output_$TIMESTAMP.zip"
           fi
           
@@ -751,11 +528,13 @@ jobs:
           else
             echo "## 🎬 AI Director Ultra" >> $GITHUB_STEP_SUMMARY
             echo "Workflow completed." >> $GITHUB_STEP_SUMMARY
-            echo "Check logs for details." >> $GITHUB_STEP_SUMMARY
+            if [ -f "ai_director_simple.py" ]; then
+              echo "Script executed." >> $GITHUB_STEP_SUMMARY
+            fi
           fi
           
       - name: 🧹 Cleanup
         if: always()
         run: |
           rm -rf workspace/ || true
-          rm -f ai_director_ultra.py || true
+          rm -f ai_director_simple.py || true
