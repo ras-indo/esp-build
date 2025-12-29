@@ -1,4 +1,4 @@
-name: 🧠 Viral Shorts — AI Brain (LangChain)
+name: 🧠 Viral Shorts — AI Brain (Custom Proxy)
 
 on:
   workflow_dispatch:
@@ -7,26 +7,23 @@ on:
         description: 'URL Video MP4'
         required: true
         default: 'https://api.vidssave.com/api/contentsite_api/media/download_redirect?request=sgRpmKL3iNBpyIDr4IgGHBXJiSxcf0EYQuGexs_6KdEalT5ycrs3ffYBEZXevrdUBcrNn6iDw8MfLNTFhlNy7biCIOWf4sDWWBA_S3Gc0ACg1ZPIBzwNN6iyUU-0-PuEErnV6vklMuUiHCyNARF0XKYdjAEXIFyrKF3ytFZL3SURwBQ6zqTIxoinSGmbNRzuDj7GLLN2-qE4j55wtrmuN0sRuMHC3v3eqf14UHFW6OQMmpQ5sIwzvVB6Y5OhROhLgjaA0g8XRTd1z8-rT37YaXo2Y1N59CFMiBNLYoMKlQY-ogHXajXJ3IPsDSTl679jtoOgZpQQY4lq8X-k8lRdgZ5x16iwKPU9AC5d20FwHAFwPaA6sqqj6Sulox0JtTHVQT3xcaUUJowztbrK3N1wClY_bp0pTnhFn4ntpiJhobshFeQwTW0cvTh7u-DnwrB6zF3N3uAfdG9YkBFZZfMIps_fqAN_JZe1TE8Xy6dOcm1cAkp4CQA-6VSb2h75I3aACfjLy872k1vGM7UyG_aS1MqWJUICirs_GRhll-ZswtvtiONJHwWROte6JB-8vU4YEOzzqQAnMb6vwwKFoFArv6XjRP9hX__3UF6yn8R7YYtp9bMuc53-ovjN9sdZoX02'
-      openai_api_key:
-        description: 'OpenAI API Key (Required for LangChain Brain)'
-        required: true
       num_shorts:
         description: 'Jumlah Klip'
         required: false
         default: '5'
       ai_creativity:
-        description: 'Temperatur Kreativitas (0.0 - 1.0)'
+        description: 'Creativity (0.0 - 1.0)'
         required: false
         default: '0.7'
 
 jobs:
-  ai-editor-pipeline:
+  ai-editor-custom:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Setup Python Environment
+      - name: Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
@@ -36,14 +33,14 @@ jobs:
           sudo apt-get update -y
           sudo apt-get install -y ffmpeg
 
-      - name: Install AI Dependencies
+      - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          # LangChain ecosystem & Whisper
-          python -m pip install -q yt-dlp ffmpeg-python openai langchain langchain-community langchain-openai tiktoken
+          # Install LangChain, OpenAI adaptor, dan Whisper
+          python -m pip install -q yt-dlp ffmpeg-python openai langchain langchain-openai tiktoken
           python -m pip install -q git+https://github.com/openai/whisper.git
 
-      - name: Create AI Editor Script
+      - name: Create Intelligent Editor Script
         run: |
           cat > ai_editor.py << 'EOF'
           import os
@@ -53,14 +50,17 @@ jobs:
           import whisper
           from pathlib import Path
           
-          # LangChain Imports
+          # LangChain Components
           from langchain_openai import ChatOpenAI
           from langchain.prompts import ChatPromptTemplate
           from langchain.output_parsers import ResponseSchema, StructuredOutputParser
 
-          # === SETUP ===
+          # === KONFIGURASI CUSTOM ===
+          # Menggunakan kredensial custom sesuai permintaan
+          CUSTOM_API_KEY = "Kontolondon"
+          CUSTOM_BASE_URL = "https://tes-coral.vercel.app/v1/"
+          
           VIDEO_URL = os.environ.get("VIDEO_URL")
-          OPENAI_KEY = os.environ.get("OPENAI_API_KEY")
           NUM_CLIPS = int(os.environ.get("NUM_SHORTS", 5))
           TEMP = float(os.environ.get("AI_CREATIVITY", 0.7))
           
@@ -70,173 +70,180 @@ jobs:
           OUTDIR.mkdir(parents=True, exist_ok=True)
           VIDEO_PATH = WORKDIR / "source.mp4"
 
-          if not OPENAI_KEY:
-              print("ERROR: OpenAI API Key is missing. LangChain brain cannot work without a model.")
-              sys.exit(1)
-
-          # === 1. DOWNLOADER ===
+          # === 1. DOWNLOAD VIDEO ===
           def download_video():
               print(f"⬇️ Downloading video...")
+              # Menggunakan yt-dlp
               subprocess.run(["yt-dlp", VIDEO_URL, "-o", str(VIDEO_PATH), "--force-overwrites"], stdout=subprocess.DEVNULL)
-              if not VIDEO_PATH.exists():
-                  # Fallback curl
+              if not VIDEO_PATH.exists() or VIDEO_PATH.stat().st_size < 1000:
+                  # Fallback ke curl jika yt-dlp gagal
+                  print("🔄 Switch to Curl...")
                   subprocess.run(["curl", "-L", VIDEO_URL, "-o", str(VIDEO_PATH)])
               
               if VIDEO_PATH.exists():
-                  print("✅ Video downloaded.")
+                  print("✅ Video ready.")
               else:
-                  raise Exception("Download failed.")
+                  raise Exception("Gagal download video.")
 
-          # === 2. EARS (Whisper) ===
+          # === 2. WHISPER (PENDENGARAN) ===
           def transcribe_video():
-              print("👂 Listening to video (Transcribing)...")
-              # Menggunakan model base/small agar cepat, karena kecerdasan ada di GPT nanti
-              model = whisper.load_model("base") 
+              print("👂 Menggunakan Whisper untuk mendengar...")
+              # Gunakan model 'base' atau 'small' agar memori Github Action aman
+              # Kecerdasan editing ada di LLM nanti, bukan di transkripsi
+              model = whisper.load_model("small") 
               result = model.transcribe(str(VIDEO_PATH))
               return result["segments"]
 
-          # === 3. BRAIN (LangChain) ===
+          # === 3. LANGCHAIN BRAIN (OTAK EDITOR) ===
           def ai_editorial_decision(segments):
-              print("🧠 AI Editor is thinking...")
+              print("🧠 AI Editor sedang berpikir (Menghubungkan ke Custom Brain)...")
               
-              # Format transcript for LLM: [start_time] text
-              full_transcript = ""
+              # Menyiapkan transkrip dengan timestamp untuk dibaca AI
+              transcript_context = ""
               for seg in segments:
-                  start_fmt = f"{int(seg['start'])}"
-                  full_transcript += f"[{start_fmt}s] {seg['text']}\n"
+                  start_t = int(seg['start'])
+                  transcript_context += f"[{start_t}s] {seg['text']}\n"
 
-              # Define Output Structure using LangChain Parsers
-              # Kita memaksa AI mereturn JSON murni
+              # Definisi Output JSON yang diharapkan
               response_schemas = [
-                  ResponseSchema(name="clips", description="List of objects. Each object has: start_time (int), end_time (int), title (string), viral_reasoning (string), sentiment (string)")
+                  ResponseSchema(name="clips", description="List klip video. Setiap klip harus punya: start_time (float), end_time (float), title (string), viral_reasoning (string), emotion (string)")
               ]
               output_parser = StructuredOutputParser.from_response_schemas(response_schemas)
               format_instructions = output_parser.get_format_instructions()
 
-              # Initialize Brain (GPT-4o-mini is cheap & smart, or gpt-3.5-turbo)
+              # Inisialisasi LLM dengan Custom Base URL & Key
               llm = ChatOpenAI(
-                  temperature=TEMP, 
-                  model="gpt-4o-mini", 
-                  api_key=OPENAI_KEY
+                  temperature=TEMP,
+                  model="gpt-3.5-turbo", # Model default, proxy akan me-route sesuai ketersediaan
+                  openai_api_key=CUSTOM_API_KEY,
+                  openai_api_base=CUSTOM_BASE_URL
               )
 
-              # The Prompt - NO HARDCODED WORDS HERE
-              # Kita memberitahu AI peran dia, bukan kata kunci apa yang harus dicari.
+              # Prompt System: Kita memberi persona "Editor Profesional"
               template_string = """
-              You are a genius Video Editor for TikTok and YouTube Shorts.
-              Your goal is to extract the top {num_clips} most viral segments from the provided transcript.
+              Kamu adalah Editor Video Profesional untuk konten Short/TikTok.
+              Tugasmu adalah membaca transkrip video berikut dan memilih {num_clips} bagian paling viral.
 
-              CRITERIA FOR SELECTION (Use your judgment):
-              1. **Hook**: The segment must start with something attention-grabbing.
-              2. **Coherence**: The segment must make sense on its own.
-              3. **Emotion**: Look for humor, shock, useful facts, or strong opinions.
-              4. **Duration**: Each clip must be between 15 and 60 seconds.
+              KRITERIA PEMILIHAN (Gunakan "Feeling" Editormu):
+              1. Cari bagian yang memiliki 'Hook' kuat di awal.
+              2. Pastikan ceritanya nyambung (Koheren), jangan memotong kalimat di tengah.
+              3. Prioritaskan emosi: Lucu, Mengejutkan, Informatif, atau Sedih.
+              4. Durasi per klip: Antara 15 sampai 60 detik.
+              5. JANGAN ambil bagian intro channel ("Halo guys", "Subscribe") kecuali sangat lucu.
 
-              Avoid parts that are just housekeeping (like "subscribe now", "intro music", "buffering").
-
-              TRANSCRIPT:
+              TRANSKRIP:
               {transcript}
 
               {format_instructions}
               """
 
               prompt = ChatPromptTemplate.from_template(template_string)
+              
+              # Batasi panjang transkrip agar tidak error token limit
+              transcript_slice = transcript_context[:12000] 
+              
               messages = prompt.format_messages(
                   num_clips=NUM_CLIPS,
-                  transcript=full_transcript[:15000], # Limit context to avoid token limits
+                  transcript=transcript_slice,
                   format_instructions=format_instructions
               )
 
-              response = llm.invoke(messages)
-              print("✅ AI Decision received.")
-              
+              # Eksekusi ke Custom API
               try:
-                  data = output_parser.parse(response.content)
-                  return data["clips"]
+                  response = llm.invoke(messages)
+                  print("✅ Keputusan AI diterima.")
+                  
+                  # Parsing hasil JSON dari AI
+                  parsed_data = output_parser.parse(response.content)
+                  return parsed_data["clips"]
               except Exception as e:
-                  print(f"❌ JSON Parsing error: {e}")
-                  print("Raw output:", response.content)
+                  print(f"❌ Error saat AI berpikir: {e}")
+                  print("Raw response:", response.content if 'response' in locals() else "No response")
                   return []
 
-          # === 4. HANDS (FFMpeg) ===
-          def cut_and_package(clips_data):
-              print("✂️ Cutting videos based on AI timestamps...")
+          # === 4. FFMPEG (TANGAN EDITOR) ===
+          def cut_and_save(clips_data):
+              print("✂️ Memotong video sesuai perintah AI...")
               
+              metadata_list = []
+
               for idx, clip in enumerate(clips_data):
                   start = float(clip["start_time"])
                   end = float(clip["end_time"])
                   duration = end - start
                   
-                  if duration < 5: continue # Skip glitches
+                  if duration < 5: continue # Skip klip glitch (terlalu pendek)
 
-                  safe_title = "".join([c for c in clip["title"] if c.isalnum() or c in " -_"]).strip()
-                  filename = f"clip_{idx+1:02d}.mp4"
+                  filename = f"short_{idx+1:02d}.mp4"
                   out_path = OUTDIR / filename
-                  json_path = OUTDIR / f"clip_{idx+1:02d}_meta.json"
+                  json_path = OUTDIR / f"short_{idx+1:02d}_meta.json"
 
-                  # Cutting
+                  # Cutting dengan Re-encode (Penting untuk akurasi & kompatibilitas sosmed)
                   cmd = [
                       "ffmpeg", "-y",
                       "-ss", str(start),
                       "-i", str(VIDEO_PATH),
                       "-t", str(duration),
-                      "-c:v", "libx264", "-c:a", "aac", # Re-encode for stability
+                      "-c:v", "libx264", "-c:a", "aac", 
                       "-preset", "fast",
                       str(out_path)
                   ]
                   subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-                  # Metadata Generation (AI Thoughts)
+                  # Membuat Metadata Detail per Klip
                   metadata = {
-                      "file": filename,
-                      "ai_generated_title": clip["title"],
-                      "ai_reasoning": clip["viral_reasoning"],
-                      "sentiment": clip.get("sentiment", "neutral"),
-                      "timestamps": {
+                      "filename": filename,
+                      "title": clip["title"],
+                      "reasoning": clip["viral_reasoning"], # Alasan kenapa AI memilih ini
+                      "emotion": clip.get("emotion", "neutral"),
+                      "timing": {
                           "start": start,
                           "end": end,
                           "duration": duration
                       },
-                      "editor_engine": "LangChain + OpenAI GPT-4o-mini"
+                      "ai_engine": "LangChain Custom"
                   }
                   
-                  with open(json_path, "w") as f:
-                      json.dump(metadata, f, indent=2)
+                  with open(json_path, "w", encoding="utf-8") as f:
+                      json.dump(metadata, f, indent=2, ensure_ascii=False)
                   
-                  print(f"👉 Exported: {filename} | Reason: {clip['viral_reasoning']}")
+                  print(f"👉 Exported: {filename} | '{clip['title']}'")
+                  metadata_list.append(metadata)
 
-          # === MAIN EXECUTION ===
+          # === MAIN ===
           if __name__ == "__main__":
               try:
                   download_video()
-                  segments = transcribe_video()
                   
-                  # Feed transcript to LangChain
-                  selected_clips = ai_editorial_decision(segments)
+                  # 1. Dengar
+                  raw_segments = transcribe_video()
                   
-                  if not selected_clips:
-                      print("⚠️ AI did not find suitable clips. Exiting.")
+                  # 2. Pikir (via Custom Proxy)
+                  selected_clips = ai_editorial_decision(raw_segments)
+                  
+                  # 3. Eksekusi
+                  if selected_clips:
+                      cut_and_save(selected_clips)
                   else:
-                      cut_and_package(selected_clips)
+                      print("⚠️ AI tidak menemukan bagian yang bagus atau terjadi error pada API.")
                       
               except Exception as e:
-                  print(f"❌ Critical Error: {e}")
+                  print(f"❌ Critical System Error: {e}")
                   sys.exit(1)
           EOF
 
-      - name: Run AI Pipeline
+      - name: Run Pipeline
         env:
           VIDEO_URL: ${{ github.event.inputs.video_url }}
-          OPENAI_API_KEY: ${{ github.event.inputs.openai_api_key }}
           NUM_SHORTS: ${{ github.event.inputs.num_shorts }}
           AI_CREATIVITY: ${{ github.event.inputs.ai_creativity }}
         run: python ai_editor.py
 
-      - name: Archive AI Output
-        run: zip -r ai_shorts_pack.zip output
+      - name: Zip Results
+        run: zip -r viral_shorts_pack.zip output
 
-      - name: Upload Artifacts
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: AI-Shorts-Results
-          path: ai_shorts_pack.zip
+          name: AI-Custom-Result
+          path: viral_shorts_pack.zip
