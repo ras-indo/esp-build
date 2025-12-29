@@ -62,7 +62,7 @@ jobs:
             ffmpeg \
             libsm6 \
             libxext6 \
-            libgl1-mesa-glx \
+            libgl1 \
             sox \
             libsox-fmt-mp3 \
             imagemagick \
