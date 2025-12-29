@@ -22,6 +22,8 @@ on:
           - instagram_reels
   push:
     branches: [ main ]
+    paths:
+      - '.github/workflows/ai-director-pro.yml'
 
 jobs:
   ai-director-pro:
