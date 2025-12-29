@@ -1,16 +1,16 @@
-name: 🎬 AI Director Pro (GPT-4 + Whisper Medium)
+name: 🎬 AI Director Ultra (Auto-Run + GPT-4 + Whisper Medium)
 
 on:
   workflow_dispatch:
     inputs:
       video_url:
-        description: 'URL Video MP4'
+        description: 'URL Video MP4/YouTube'
         required: true
-        default: 'https://api.vidssave.com/api/contentsite_api/media/download_redirect?request=sgRpmKL3iNBpyIDr4IgGHBXJiSxcf0EYQuGexs_6KdEalT5ycrs3ffYBEZXevrdUBcrNn6iDw8MfLNTFhlNy7biCIOWf4sDWWBA_S3Gc0ACg1ZPIBzwNN6iyUU-0-PuEErnV6vklMuUiHCyNARF0XKYdjAEXIFyrKF3ytFZL3SURwBQ6zqTIxoinSGmbNRzuDj7GLLN2-qE4j55wtrmuN0sRuMHC3v3eqf14UHFW6OQMmpQ5sIwzvVB6Y5OhROhLgjaA0g8XRTd1z8-rT37YaXo2Y1N59CFMiBNLYoMKlQY-ogHXajXJ3IPsDSTl679jtoOgZpQQY4lq8X-k8lRdgZ5x16iwKPU9AC5d20FwHAFwPaA6sqqj6Sulox0JtTHVQT3xcaUUJowztbrK3N1wClY_bp0pTnhFn4ntpiJhobshFeQwTW0cvTh7u-DnwrB6zF3N3uAfdG9YkBFZZfMIps_fqAN_JZe1TE8Xy6dOcm1cAkp4CQA-6VSb2h75I3aACfjLy872k1vGM7UyG_aS1MqWJUICirs_GRhll-ZswtvtiONJHwWROte6JB-8vU4YEOzzqQAnMb6vwwKFoFArv6XjRP9hX__3UF6yn8R7YYtp9bMuc53-ovjN9sdZoX02'
+        default: 'https://api.vidssave.com/api/contentsite_api/media/download_redirect?request=sgRpmKL3iNBpyIDr4IgGHBXJiSxcf0EYQuGexs_6KdEalT5ycrs3ffYBEZXevrdUBcrN6iDw8MfLNTFhlNy7biCIOWf4sDWWBA_S3Gc0ACg1ZPIBzwNN6iyUU-0-PuEErnV6vklMuUiHCyNARF0XKYdjAEXIFyrKF3ytFZL3SURwBQ6zqTIxoinSGmbNRzuDj7GLLN2-qE4j55wtrmuN0sRuMHC3v3eqf14UHFW6OQMmpQ5sIwzvVB6Y5OhROhLgjaA0g8XRTd1z8-rT37YaXo2Y1N59CFMiBNLYoMKlQY-ogHXajXJ3IPsDSTl679jtoOgZpQQY4lq8X-k8lRdgZ5x16iwKPU9AC5d20FwHAFwPaA6sqqj6Sulox0JtTHVQT3xcaUUJowztbrK3N1wClY_bp0pTnhFn4ntpiJhobshFeQwTW0cvTh7u-DnwrB6zF3N3uAfdG9YkBFZZfMIps_fqAN_JZe1TE8Xy6dOcm1cAkp4CQA-6VSb2h75I3aACfjLy872k1vGM7UyG_aS1MqWJUICirs_GRhll-ZswtvtiONJHwWROte6JB-8vU4YEOzzqQAnMb6vwwKFoFArv6XjRP9hX__3UF6yn8R7YYtp9bMuc53-ovjN9sdZoX02'
       num_shorts:
         description: 'Target Jumlah Klip'
         required: false
-        default: '5'
+        default: '8'
       platform:
         description: 'Platform Target'
         required: false
@@ -20,44 +20,107 @@ on:
           - tiktok
           - youtube_shorts
           - instagram_reels
+          - all
+      quality:
+        description: 'Kualitas Video'
+        required: false
+        default: 'balanced'
+        type: choice
+        options:
+          - fast
+          - balanced
+          - high
   push:
-    branches: [ main ]
+    branches: [ main, master ]
     paths:
-      - '.github/workflows/ai-director-pro.yml'
+      - '.github/workflows/ai-director-ultra.yml'
+  schedule:
+    - cron: '0 6,12,18 * * *'  # Auto-run 3x sehari
+  repository_dispatch:
+    types: [trigger_ai_director]
 
 jobs:
-  ai-director-pro:
+  ai-director-ultra:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     
     steps:
-      - name: 🏗️ Checkout Repository
+      - name: 📁 Setup Workspace
+        run: |
+          mkdir -p workspace output logs assets
+          
+      - name: ⚡ Checkout Repository
         uses: actions/checkout@v4
         
-      - name: 🐍 Setup Python
-        uses: actions/setup-python@v4
+      - name: 🐍 Setup Python 3.10
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
           cache: 'pip'
           
-      - name: 🛠️ Install System Dependencies
+      - name: 🔧 Install System Dependencies
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y ffmpeg wget curl
+          sudo apt-get install -y \
+            ffmpeg \
+            libsm6 \
+            libxext6 \
+            libgl1-mesa-glx \
+            sox \
+            libsox-fmt-mp3 \
+            imagemagick \
+            git \
+            wget \
+            curl \
+            pv
           
-      - name: 📦 Install Python Dependencies
+      - name: 📦 Install Python Packages
         run: |
-          pip install --upgrade pip
+          python -m pip install --upgrade pip
+          
+          # Core AI/ML
           pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-          pip install openai langchain langchain-openai langchain-community
-          pip install whisper yt-dlp ffmpeg-python tiktoken
-          pip install numpy pandas tqdm loguru colorama
+          pip install openai==1.12.0
+          pip install langchain==0.1.14
+          pip install langchain-openai==0.0.8
+          pip install langchain-community==0.0.24
           
-      - name: 🎬 Create AI Director Script
+          # Audio/Video Processing
+          pip install whisper==1.1.10
+          pip install yt-dlp==2024.4.9
+          pip install ffmpeg-python==0.2.0
+          pip install moviepy==1.0.3
+          pip install pydub==0.25.1
+          
+          # Utilities
+          pip install numpy==1.26.4
+          pip install pandas==2.2.1
+          pip install tiktoken==0.6.0
+          pip install tqdm==4.66.2
+          pip install pillow==10.2.0
+          pip install requests==2.31.0
+          pip install colorama==0.4.6
+          pip install python-dotenv==1.0.0
+          pip install tenacity==8.2.3
+          pip install backoff==2.2.1
+          
+      - name: 🚀 Run AI Director Ultra
+        env:
+          OPENAI_API_KEY: "Kontolondon"
+          OPENAI_API_BASE: "https://tes-coral.vercel.app/v1/"
+          VIDEO_URL: ${{ github.event.inputs.video_url }}
+          NUM_SHORTS: ${{ github.event.inputs.num_shorts || 8 }}
+          TARGET_PLATFORM: ${{ github.event.inputs.platform || 'tiktok' }}
+          QUALITY_PRESET: ${{ github.event.inputs.quality || 'balanced' }}
+          ENABLE_HARDWARE_ACCEL: true
+          MAX_RETRIES: 15
+          WORKER_THREADS: 4
         run: |
-          cat > ai_director_pro.py << 'EOF'
+          cat > ai_director_ultra.py << 'EOF'
+          #!/usr/bin/env python3
           """
-          🎬 AI Director Pro - GPT-4 + Whisper Medium
+          🎬 AI DIRECTOR ULTRA - Enhanced Production Pipeline
+          GPT-4 + Whisper Medium + Multi-Platform Optimization
           """
           
           import os
@@ -67,1005 +130,1307 @@ jobs:
           import subprocess
           import gc
           import time
+          import asyncio
+          import logging
+          import hashlib
+          import signal
           from pathlib import Path
-          from typing import List, Dict, Any
+          from datetime import datetime
+          from typing import List, Dict, Any, Optional, Tuple
+          from dataclasses import dataclass, asdict
+          from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
+          
           import torch
           import whisper
+          import numpy as np
+          import pandas as pd
+          from tqdm import tqdm
+          import colorama
+          from colorama import Fore, Style
+          from tenacity import (
+              retry,
+              stop_after_attempt,
+              wait_exponential,
+              retry_if_exception_type,
+              before_sleep_log
+          )
           
           # LangChain imports
           from langchain_openai import ChatOpenAI
           from langchain_core.prompts import ChatPromptTemplate
           from langchain_core.output_parsers import JsonOutputParser
+          from langchain_core.exceptions import LangChainError
+          
+          # Initialize colorama
+          colorama.init(autoreset=True)
           
           # Configure logging
-          import logging
           logging.basicConfig(
               level=logging.INFO,
-              format='%(asctime)s - %(levelname)s - %(message)s'
+              format=f'{Fore.CYAN}%(asctime)s{Style.RESET_ALL} - {Fore.GREEN}%(name)s{Style.RESET_ALL} - {Fore.YELLOW}%(levelname)s{Style.RESET_ALL} - %(message)s',
+              handlers=[
+                  logging.FileHandler('ai_director.log'),
+                  logging.StreamHandler(sys.stdout)
+              ]
           )
-          logger = logging.getLogger(__name__)
+          logger = logging.getLogger("AI_Director_Ultra")
           
-          # ============================================================================
-          # CONFIGURATION
-          # ============================================================================
-          
+          # ========== CONFIGURATION ==========
+          @dataclass
           class Config:
-              """Configuration settings"""
+              """Centralized configuration"""
+              # API Configuration (Hardcoded as requested)
+              OPENAI_API_KEY: str = "Kontolondon"
+              OPENAI_API_BASE: str = "https://tes-coral.vercel.app/v1/"
               
-              # API Configuration - DI DALAM CODE
-              OPENAI_API_KEY = "Kontolondon"
-              OPENAI_API_BASE = "https://tes-coral.vercel.app/v1/"
+              # Model Configuration
+              GPT_MODEL: str = "gpt-4"
+              WHISPER_MODEL: str = "medium"
+              TEMPERATURE: float = 0.2
+              MAX_TOKENS: int = 4096
               
-              # Model Configuration - TETAP gunakan GPT-4 dan Whisper Medium
-              GPT_MODEL = "gpt-4"
-              WHISPER_MODEL = "medium"
+              # Video Configuration
+              VIDEO_URL: str = os.getenv("VIDEO_URL", "")
+              NUM_SHORTS: int = int(os.getenv("NUM_SHORTS", 8))
+              TARGET_PLATFORM: str = os.getenv("TARGET_PLATFORM", "tiktok").lower()
+              QUALITY_PRESET: str = os.getenv("QUALITY_PRESET", "balanced").lower()
               
-              # Video Processing
-              VIDEO_URL = os.environ.get("VIDEO_URL", "")
-              NUM_SHORTS = int(os.environ.get("NUM_SHORTS", 5))
-              TARGET_PLATFORM = os.environ.get("TARGET_PLATFORM", "tiktok")
+              # Platform Presets
+              PLATFORM_PRESETS: Dict = None
               
               # Performance
-              DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-              BATCH_SIZE = 16
+              ENABLE_HARDWARE_ACCEL: bool = os.getenv("ENABLE_HARDWARE_ACCEL", "true").lower() == "true"
+              WORKER_THREADS: int = int(os.getenv("WORKER_THREADS", 4))
+              MAX_RETRIES: int = int(os.getenv("MAX_RETRIES", 15))
+              BATCH_SIZE: int = 4
               
               # Paths
-              WORK_DIR = Path("workspace")
-              OUTPUT_DIR = Path("output")
+              WORKDIR: Path = Path("workspace")
+              OUTDIR: Path = Path("output")
+              LOGDIR: Path = Path("logs")
+              ASSETS_DIR: Path = Path("assets")
+              CACHE_DIR: Path = Path(".cache")
               
-              # Platform Configurations
-              PLATFORM_CONFIGS = {
-                  "tiktok": {
-                      "name": "TikTok",
-                      "resolution": {"width": 1080, "height": 1920},
-                      "duration_range": (5, 60),
-                      "hashtags": ["#fyp", "#viral", "#foryou", "#trending"]
-                  },
-                  "youtube_shorts": {
-                      "name": "YouTube Shorts",
-                      "resolution": {"width": 1080, "height": 1920},
-                      "duration_range": (15, 60),
-                      "hashtags": ["#shorts", "#youtubeshorts", "#viral"]
-                  },
-                  "instagram_reels": {
-                      "name": "Instagram Reels",
-                      "resolution": {"width": 1080, "height": 1920},
-                      "duration_range": (3, 90),
-                      "hashtags": ["#reels", "#instagram", "#viral"]
+              def __post_init__(self):
+                  """Initialize platform presets"""
+                  self.PLATFORM_PRESETS = {
+                      'tiktok': {
+                          'name': 'TikTok',
+                          'resolution': '1080x1920',
+                          'max_duration': 60,
+                          'min_duration': 5,
+                          'ideal_duration': 15,
+                          'aspect_ratio': '9:16',
+                          'max_size_mb': 287,
+                          'fps': 30,
+                          'bitrate': '2000k',
+                          'hashtags': ['#fyp', '#viral', '#foryou', '#trending', '#xyzbca', '#fypシ'],
+                          'caption_style': 'casual',
+                          'viral_triggers': ['challenge', 'trend', 'lifehack', 'prank', 'storytime']
+                      },
+                      'youtube_shorts': {
+                          'name': 'YouTube Shorts',
+                          'resolution': '1080x1920',
+                          'max_duration': 60,
+                          'min_duration': 15,
+                          'ideal_duration': 30,
+                          'aspect_ratio': '9:16',
+                          'max_size_mb': 500,
+                          'fps': 30,
+                          'bitrate': '3000k',
+                          'hashtags': ['#shorts', '#youtubeshorts', '#short', '#viral', '#trending'],
+                          'caption_style': 'informative',
+                          'viral_triggers': ['tutorial', 'howto', 'review', 'experiment', 'comparison']
+                      },
+                      'instagram_reels': {
+                          'name': 'Instagram Reels',
+                          'resolution': '1080x1920',
+                          'max_duration': 90,
+                          'min_duration': 3,
+                          'ideal_duration': 30,
+                          'aspect_ratio': '9:16',
+                          'max_size_mb': 100,
+                          'fps': 30,
+                          'bitrate': '2500k',
+                          'hashtags': ['#reels', '#instagram', '#reelsvideo', '#viral', '#trending'],
+                          'caption_style': 'engaging',
+                          'viral_triggers': ['aesthetic', 'transition', 'comedy', 'dance', 'beauty']
+                      },
+                      'all': {
+                          'name': 'Multi-Platform',
+                          'resolution': '1080x1920',
+                          'max_duration': 60,
+                          'min_duration': 8,
+                          'ideal_duration': 20,
+                          'aspect_ratio': '9:16',
+                          'max_size_mb': 250,
+                          'fps': 30,
+                          'bitrate': '2000k',
+                          'hashtags': ['#viral', '#trending', '#fyp', '#shorts', '#reels'],
+                          'caption_style': 'universal',
+                          'viral_triggers': ['emotional', 'surprising', 'educational', 'entertaining', 'relatable']
+                      }
                   }
-              }
-              
-              def __init__(self):
-                  """Initialize directories"""
-                  self.WORK_DIR.mkdir(exist_ok=True)
-                  self.OUTPUT_DIR.mkdir(exist_ok=True)
                   
-                  logger.info(f"🔧 Configuration loaded")
-                  logger.info(f"📱 Target Platform: {self.TARGET_PLATFORM}")
-                  logger.info(f"🎯 Number of Shorts: {self.NUM_SHORTS}")
-                  logger.info(f"🤖 Using Device: {self.DEVICE}")
+                  # Create directories
+                  self.WORKDIR.mkdir(exist_ok=True)
+                  self.OUTDIR.mkdir(exist_ok=True)
+                  self.LOGDIR.mkdir(exist_ok=True)
+                  self.ASSETS_DIR.mkdir(exist_ok=True)
+                  self.CACHE_DIR.mkdir(exist_ok=True)
+                  
+                  # Validate configuration
+                  if not self.VIDEO_URL:
+                      raise ValueError("VIDEO_URL is required!")
+                  
+                  if self.TARGET_PLATFORM not in self.PLATFORM_PRESETS:
+                      self.TARGET_PLATFORM = 'all'
+                      
+                  logger.info(f"{Fore.MAGENTA}⚙️ Configuration Loaded:{Style.RESET_ALL}")
+                  logger.info(f"  Platform: {self.PLATFORM_PRESETS[self.TARGET_PLATFORM]['name']}")
+                  logger.info(f"  Target Clips: {self.NUM_SHORTS}")
+                  logger.info(f"  Quality: {self.QUALITY_PRESET.upper()}")
+                  logger.info(f"  GPU Acceleration: {'✅ Enabled' if self.ENABLE_HARDWARE_ACCEL and torch.cuda.is_available() else '⏺️ CPU Mode'}")
           
+          # Initialize config
           config = Config()
           
-          # ============================================================================
-          # VIDEO DOWNLOADER
-          # ============================================================================
-          
-          class VideoDownloader:
-              """Download video from URL"""
-              
-              @staticmethod
-              def download(video_url: str, output_path: Path) -> bool:
-                  """Download video using yt-dlp or curl"""
-                  logger.info(f"📥 Downloading video from: {video_url}")
-                  
-                  try:
-                      # Try yt-dlp first
-                      cmd = [
-                          "yt-dlp", video_url,
-                          "-o", str(output_path),
-                          "--force-overwrites",
-                          "--quiet"
-                      ]
-                      result = subprocess.run(cmd, capture_output=True, text=True)
-                      
-                      if result.returncode == 0 and output_path.exists():
-                          logger.info("✅ Video downloaded successfully with yt-dlp")
-                          return True
-                  except Exception as e:
-                      logger.warning(f"yt-dlp failed: {e}")
-                  
-                  # Fallback to curl
-                  try:
-                      cmd = ["curl", "-L", video_url, "-o", str(output_path)]
-                      result = subprocess.run(cmd, capture_output=True, text=True)
-                      
-                      if result.returncode == 0 and output_path.exists():
-                          logger.info("✅ Video downloaded successfully with curl")
-                          return True
-                  except Exception as e:
-                      logger.warning(f"curl failed: {e}")
-                  
-                  logger.error("❌ All download methods failed")
-                  return False
-          
-          # ============================================================================
-          # AUDIO PROCESSOR WITH WHISPER MEDIUM
-          # ============================================================================
-          
-          class AudioProcessor:
-              """Audio processing with Whisper Medium"""
-              
-              def __init__(self):
-                  self.model = None
-                  
-              def load_model(self):
-                  """Load Whisper Medium model"""
-                  logger.info(f"🤖 Loading Whisper Medium model on {config.DEVICE}...")
-                  try:
-                      self.model = whisper.load_model(
-                          config.WHISPER_MODEL,
-                          device=config.DEVICE,
-                          download_root=str(config.WORK_DIR)
-                      )
-                      logger.info("✅ Whisper Medium model loaded")
-                  except Exception as e:
-                      logger.error(f"❌ Failed to load Whisper model: {e}")
-                      raise
-              
-              def transcribe(self, audio_path: Path) -> List[Dict]:
-                  """Transcribe audio using Whisper Medium"""
-                  logger.info("👂 Transcribing audio with Whisper Medium...")
-                  
-                  if not self.model:
-                      self.load_model()
-                  
-                  try:
-                      # Transcribe with detailed timestamps
-                      result = self.model.transcribe(
-                          str(audio_path),
-                          fp16=(config.DEVICE == "cuda"),
-                          language="id",  # Auto-detect language
-                          verbose=False,
-                          condition_on_previous_text=False
-                      )
-                      
-                      segments = []
-                      for seg in result["segments"]:
-                          segments.append({
-                              "start": seg["start"],
-                              "end": seg["end"],
-                              "text": seg["text"].strip(),
-                              "confidence": seg.get("confidence", 0.9)
-                          })
-                      
-                      logger.info(f"✅ Transcription complete: {len(segments)} segments")
-                      return segments
-                      
-                  except Exception as e:
-                      logger.error(f"❌ Transcription failed: {e}")
-                      raise
-              
-              def extract_audio(self, video_path: Path) -> Path:
-                  """Extract audio from video"""
-                  audio_path = config.WORK_DIR / "audio.wav"
-                  
-                  logger.info("🎵 Extracting audio from video...")
-                  
-                  cmd = [
-                      "ffmpeg", "-i", str(video_path),
-                      "-q:a", "0", "-map", "a",
-                      "-ac", "1", "-ar", "16000",
-                      str(audio_path),
-                      "-y"
-                  ]
-                  
-                  try:
-                      subprocess.run(cmd, check=True, capture_output=True)
-                      logger.info("✅ Audio extracted successfully")
-                      return audio_path
-                  except Exception as e:
-                      logger.error(f"❌ Audio extraction failed: {e}")
-                      raise
-          
-          # ============================================================================
-          # AI DIRECTOR WITH GPT-4
-          # ============================================================================
-          
-          class AIDirector:
-              """AI Director using GPT-4"""
-              
-              def __init__(self):
-                  self.llm = None
-                  self.initialize_llm()
-              
-              def initialize_llm(self):
-                  """Initialize GPT-4 model"""
-                  logger.info("🧠 Initializing GPT-4 model...")
-                  
-                  try:
-                      self.llm = ChatOpenAI(
-                          model=config.GPT_MODEL,
-                          temperature=0.3,
-                          max_tokens=3000,
-                          api_key=config.OPENAI_API_KEY,
-                          base_url=config.OPENAI_API_BASE,
-                          timeout=60,
-                          max_retries=5
-                      )
-                      logger.info("✅ GPT-4 model initialized")
-                  except Exception as e:
-                      logger.error(f"❌ Failed to initialize GPT-4: {e}")
-                      raise
-              
-              def analyze_and_decide(self, segments: List[Dict]) -> List[Dict]:
-                  """Analyze transcript and decide on clips"""
-                  logger.info("🎬 AI Director analyzing content...")
-                  
-                  # Prepare transcript text
-                  transcript_text = ""
-                  for seg in segments:
-                      timestamp = f"[{int(seg['start'])}s-{int(seg['end'])}s]"
-                      transcript_text += f"{timestamp} {seg['text']}\n"
-                  
-                  # Truncate if too long (keep under token limit)
-                  transcript_text = transcript_text[:15000]
-                  
-                  # Create prompt
-                  prompt = self._create_prompt(transcript_text)
-                  
-                  # Get AI response with retry logic
-                  for attempt in range(3):
-                      try:
-                          logger.info(f"🔄 AI Analysis attempt {attempt + 1}/3")
-                          response = self.llm.invoke(prompt)
-                          decisions = self._parse_response(response.content)
-                          
-                          if decisions:
-                              logger.info(f"✅ AI generated {len(decisions)} clip decisions")
-                              return decisions
-                              
-                      except Exception as e:
-                          logger.warning(f"Attempt {attempt + 1} failed: {e}")
-                          if attempt < 2:
-                              time.sleep(2)
-                          continue
-                  
-                  # Fallback to rule-based decisions if AI fails
-                  logger.warning("🤖 AI failed, using rule-based decisions")
-                  return self._rule_based_decisions(segments)
-              
-              def _create_prompt(self, transcript: str) -> str:
-                  """Create prompt for GPT-4"""
-                  
-                  platform_config = config.PLATFORM_CONFIGS[config.TARGET_PLATFORM]
-                  duration_range = platform_config["duration_range"]
-                  
-                  prompt = f"""ANDA ADALAH AI DIRECTOR PROFESIONAL yang ahli dalam membuat konten viral.
-
-TUGAS: Analisis transkrip video berikut dan pilih {config.NUM_SHORTS} momen terbaik untuk dijadikan short video.
-
-PLATFORM TARGET: {platform_config['name']}
-DURASI OPTIMAL: {duration_range[0]}-{duration_range[1]} detik
-HASHTAGS REKOMENDASI: {', '.join(platform_config['hashtags'])}
-
-KRITERIA PEMILIHAN:
-1. HOOK KUAT - 3 detik pertama harus menarik
-2. NILAI EMOSIONAL - Membangkitkan emosi (senang, terkejut, penasaran)
-3. POTENSI VIRAL - Konten yang mudah dibagikan
-4. KEJELASAN AUDIO - Suara jelas dan mudah dipahami
-5. DURASI OPTIMAL - Sesuai durasi platform target
-
-FORMAT OUTPUT (JSON array):
-[
-  {{
-    "start_time": 45.2,
-    "end_time": 52.8,
-    "duration": 7.6,
-    "title": "Judul viral yang menarik",
-    "viral_score": 85,
-    "reason": "Alasan kenapa moment ini viral",
-    "hook_phrase": "Frase pembuka yang menarik",
-    "hashtags": ["#fyp", "#viral", "#trending"],
-    "caption": "Caption untuk sosial media"
-  }}
-]
-
-TRANSCRIPT VIDEO:
-{transcript}
-
-INSTRUKSI:
-1. Pilih momen dengan hook terkuat
-2. Pastikan durasi antara {duration_range[0]}-{duration_range[1]} detik
-3. Berikan judul yang clickbait tapi relevan
-4. Tulis caption yang engaging
-5. Gunakan hashtag yang relevan
-
-Hanya kembalikan JSON array, tanpa penjelasan lain."""
-                  
-                  return prompt
-              
-              def _parse_response(self, response_text: str) -> List[Dict]:
-                  """Parse AI response"""
-                  try:
-                      # Clean response text
-                      response_text = response_text.strip()
-                      
-                      # Remove markdown code blocks if present
-                      if response_text.startswith("```json"):
-                          response_text = response_text[7:]
-                      elif response_text.startswith("```"):
-                          response_text = response_text[3:]
-                      
-                      if response_text.endswith("```"):
-                          response_text = response_text[:-3]
-                      
-                      # Parse JSON
-                      decisions = json.loads(response_text)
-                      
-                      # Validate decisions
-                      valid_decisions = []
-                      for decision in decisions:
-                          if isinstance(decision, dict):
-                              # Ensure required fields
-                              if all(k in decision for k in ["start_time", "end_time"]):
-                                  # Calculate duration if not present
-                                  if "duration" not in decision:
-                                      decision["duration"] = decision["end_time"] - decision["start_time"]
-                                  
-                                  valid_decisions.append(decision)
-                      
-                      return valid_decisions
-                      
-                  except json.JSONDecodeError as e:
-                      logger.error(f"❌ Failed to parse AI response: {e}")
-                      logger.debug(f"Raw response: {response_text[:500]}")
-                      return []
-                  except Exception as e:
-                      logger.error(f"❌ Error parsing response: {e}")
-                      return []
-              
-              def _rule_based_decisions(self, segments: List[Dict]) -> List[Dict]:
-                  """Create rule-based decisions as fallback"""
-                  logger.info("📋 Creating rule-based decisions...")
-                  
-                  decisions = []
-                  platform_config = config.PLATFORM_CONFIGS[config.TARGET_PLATFORM]
-                  duration_range = platform_config["duration_range"]
-                  
-                  # Find segments with emotional indicators
-                  emotional_words = ["wow", "gila", "luar biasa", "menakjubkan", 
-                                   "mengejutkan", "heboh", "viral", "trending"]
-                  
-                  candidate_segments = []
-                  for seg in segments:
-                      text_lower = seg["text"].lower()
-                      
-                      # Score based on emotional words
-                      score = 0
-                      for word in emotional_words:
-                          if word in text_lower:
-                              score += 10
-                      
-                      # Score based on punctuation
-                      if "!" in seg["text"]:
-                          score += 5
-                      if "?" in seg["text"]:
-                          score += 3
-                      
-                      # Score based on length (optimal 10-30 words)
-                      word_count = len(seg["text"].split())
-                      if 10 <= word_count <= 30:
-                          score += 8
-                      
-                      if score > 10:
-                          seg["score"] = score
-                          candidate_segments.append(seg)
-                  
-                  # Sort by score
-                  candidate_segments.sort(key=lambda x: x.get("score", 0), reverse=True)
-                  
-                  # Create decisions
-                  for i, seg in enumerate(candidate_segments[:config.NUM_SHORTS]):
-                      # Create clip with optimal duration
-                      start_time = seg["start"]
-                      end_time = seg["end"]
-                      duration = end_time - start_time
-                      
-                      # Adjust to platform duration limits
-                      if duration < duration_range[0]:
-                          end_time = start_time + duration_range[0]
-                      elif duration > duration_range[1]:
-                          end_time = start_time + duration_range[1]
-                      
-                      decision = {
-                          "start_time": start_time,
-                          "end_time": end_time,
-                          "duration": end_time - start_time,
-                          "title": f"Momen Viral {i+1}",
-                          "viral_score": seg.get("score", 50),
-                          "reason": "Ditemukan oleh sistem AI",
-                          "hook_phrase": seg["text"][:50] + "...",
-                          "hashtags": platform_config["hashtags"][:3],
-                          "caption": f"Lihat momen ini! {seg['text'][:100]}..."
-                      }
-                      
-                      decisions.append(decision)
-                  
-                  # If not enough candidates, create evenly spaced clips
-                  if len(decisions) < config.NUM_SHORTS:
-                      total_duration = 0
-                      if segments:
-                          total_duration = segments[-1]["end"]
-                      
-                      for i in range(config.NUM_SHORTS - len(decisions)):
-                          start = (total_duration / config.NUM_SHORTS) * i
-                          end = start + duration_range[0]
-                          
-                          decision = {
-                              "start_time": start,
-                              "end_time": end,
-                              "duration": duration_range[0],
-                              "title": f"Highlight {i+1}",
-                              "viral_score": 40,
-                              "reason": "Auto-generated highlight",
-                              "hook_phrase": "Check this out!",
-                              "hashtags": ["#video", "#highlight", "#content"],
-                              "caption": "Great moment from the video!"
-                          }
-                          
-                          decisions.append(decision)
-                  
-                  logger.info(f"📋 Created {len(decisions)} rule-based decisions")
-                  return decisions
-          
-          # ============================================================================
-          # VIDEO EDITOR
-          # ============================================================================
-          
-          class VideoEditor:
-              """Video editing and exporting"""
-              
-              @staticmethod
-              def create_clip(source_video: Path, decision: Dict, output_path: Path) -> bool:
-                  """Create a video clip"""
-                  logger.info(f"✂️ Creating clip: {output_path.name}")
-                  
-                  try:
-                      # Build FFmpeg command
-                      cmd = [
-                          "ffmpeg", "-y",
-                          "-ss", str(decision["start_time"]),
-                          "-i", str(source_video),
-                          "-t", str(decision["duration"]),
-                          "-c:v", "libx264",
-                          "-preset", "fast",
-                          "-crf", "23",
-                          "-c:a", "aac",
-                          "-b:a", "128k",
-                          "-vf", VideoEditor._get_video_filters(decision),
-                          "-movflags", "+faststart",
-                          str(output_path)
-                      ]
-                      
-                      # Run FFmpeg
-                      result = subprocess.run(
-                          cmd, 
-                          capture_output=True, 
-                          text=True,
-                          timeout=300  # 5 minute timeout
-                      )
-                      
-                      if result.returncode == 0:
-                          logger.info(f"✅ Clip created: {output_path.name}")
-                          return True
-                      else:
-                          logger.error(f"❌ FFmpeg failed: {result.stderr[:500]}")
-                          return False
-                          
-                  except subprocess.TimeoutExpired:
-                      logger.error("❌ Clip creation timeout")
-                      return False
-                  except Exception as e:
-                      logger.error(f"❌ Clip creation failed: {e}")
-                      return False
-              
-              @staticmethod
-              def _get_video_filters(decision: Dict) -> str:
-                  """Get FFmpeg video filters for platform optimization"""
-                  platform_config = config.PLATFORM_CONFIGS[config.TARGET_PLATFORM]
-                  width = platform_config["resolution"]["width"]
-                  height = platform_config["resolution"]["height"]
-                  
-                  filters = [
-                      f"scale={width}:{height}:force_original_aspect_ratio=increase",
-                      "pad=width=ceil(iw/2)*2:height=ceil(ih/2)*2",
-                      "eq=brightness=0.05:contrast=1.1:saturation=1.1"
-                  ]
-                  
-                  return ",".join(filters)
-              
-              @staticmethod
-              def optimize_for_platform(video_path: Path, decision: Dict):
-                  """Optimize video for target platform"""
-                  platform_config = config.PLATFORM_CONFIGS[config.TARGET_PLATFORM]
-                  
-                  # Platform-specific optimizations
-                  if config.TARGET_PLATFORM == "tiktok":
-                      # TikTok prefers smaller file sizes
-                      max_size_mb = 287
-                  elif config.TARGET_PLATFORM == "instagram_reels":
-                      max_size_mb = 100
-                  else:
-                      max_size_mb = 500
-                  
-                  # Check file size
-                  file_size_mb = video_path.stat().st_size / (1024 * 1024)
-                  
-                  if file_size_mb > max_size_mb:
-                      logger.info(f"📦 Compressing video: {file_size_mb:.1f}MB -> {max_size_mb}MB")
-                      
-                      # Calculate target bitrate
-                      target_bitrate = int((max_size_mb * 8192) / decision["duration"])
-                      target_bitrate = max(500, min(8000, target_bitrate))
-                      
-                      compressed_path = video_path.with_stem(f"{video_path.stem}_compressed")
-                      
-                      cmd = [
-                          "ffmpeg", "-y",
-                          "-i", str(video_path),
-                          "-c:v", "libx264",
-                          "-b:v", f"{target_bitrate}k",
-                          "-preset", "veryfast",
-                          "-c:a", "aac",
-                          "-b:a", "96k",
-                          str(compressed_path)
-                      ]
-                      
-                      try:
-                          subprocess.run(cmd, check=True, capture_output=True)
-                          
-                          # Replace with compressed version
-                          video_path.unlink()
-                          compressed_path.rename(video_path)
-                          
-                          logger.info(f"✅ Compressed to {video_path.stat().st_size / (1024 * 1024):.1f}MB")
-                      except Exception as e:
-                          logger.warning(f"Compression failed: {e}")
-          
-          # ============================================================================
-          # OUTPUT MANAGER
-          # ============================================================================
-          
-          class OutputManager:
-              """Manage output files and metadata"""
-              
-              @staticmethod
-              def sanitize_filename(name: str) -> str:
-                  """Sanitize filename"""
-                  # Remove invalid characters
-                  name = re.sub(r'[<>:"/\\|?*]', '', name)
-                  # Replace multiple spaces with single space
-                  name = re.sub(r'\s+', ' ', name)
-                  # Trim and limit length
-                  name = name.strip()[:100]
-                  return name
-              
-              @staticmethod
-              def save_metadata(decision: Dict, video_path: Path, index: int):
-                  """Save metadata for a clip"""
-                  metadata = {
-                      "clip_info": {
-                          "filename": video_path.name,
-                          "clip_number": index + 1,
-                          "duration": decision["duration"],
-                          "file_size": video_path.stat().st_size,
-                          "created_at": time.strftime("%Y-%m-%d %H:%M:%S")
-                      },
-                      "content_info": {
-                          "title": decision.get("title", ""),
-                          "start_time": decision["start_time"],
-                          "end_time": decision["end_time"],
-                          "viral_score": decision.get("viral_score", 0),
-                          "reason": decision.get("reason", "")
-                      },
-                      "social_media": {
-                          "caption": decision.get("caption", ""),
-                          "hashtags": decision.get("hashtags", []),
-                          "hook_phrase": decision.get("hook_phrase", "")
-                      },
-                      "platform": config.TARGET_PLATFORM,
-                      "ai_model": {
-                          "gpt_model": config.GPT_MODEL,
-                          "whisper_model": config.WHISPER_MODEL
-                      }
-                  }
-                  
-                  # Save to JSON
-                  json_path = video_path.with_suffix('.json')
-                  with open(json_path, 'w', encoding='utf-8') as f:
-                      json.dump(metadata, f, indent=2, ensure_ascii=False)
-                  
-                  return json_path
-              
-              @staticmethod
-              def generate_report(decisions: List[Dict], output_dir: Path):
-                  """Generate summary report"""
-                  report = {
-                      "summary": {
-                          "total_clips": len(decisions),
-                          "platform": config.TARGET_PLATFORM,
-                          "processing_date": time.strftime("%Y-%m-%d"),
-                          "average_viral_score": sum(d.get("viral_score", 0) for d in decisions) / max(len(decisions), 1)
-                      },
-                      "clips": [
-                          {
-                              "clip_number": i + 1,
-                              "title": d.get("title", f"Clip {i+1}"),
-                              "duration": d["duration"],
-                              "viral_score": d.get("viral_score", 0),
-                              "start_time": d["start_time"],
-                              "end_time": d["end_time"]
-                          }
-                          for i, d in enumerate(decisions)
-                      ],
-                      "recommendations": {
-                          "best_posting_times": ["19:00", "20:00", "21:00"],
-                          "optimal_duration": config.PLATFORM_CONFIGS[config.TARGET_PLATFORM]["duration_range"],
-                          "suggested_hashtags": config.PLATFORM_CONFIGS[config.TARGET_PLATFORM]["hashtags"]
-                      }
-                  }
-                  
-                  # Save report
-                  report_path = output_dir / "generation_report.json"
-                  with open(report_path, 'w', encoding='utf-8') as f:
-                      json.dump(report, f, indent=2, ensure_ascii=False)
-                  
-                  # Create README
-                  readme_path = output_dir / "README.md"
-                  with open(readme_path, 'w', encoding='utf-8') as f:
-                      f.write(OutputManager._create_readme(report))
-                  
-                  return report_path
-              
-              @staticmethod
-              def _create_readme(report: Dict) -> str:
-                  """Create README file"""
-                  readme = f"""# AI Director Pro - Generated Content
-                  
-                  ## Summary
-                  - **Total Clips Generated**: {report['summary']['total_clips']}
-                  - **Platform**: {report['summary']['platform']}
-                  - **Average Viral Score**: {report['summary']['average_viral_score']:.1f}/100
-                  - **Processing Date**: {report['summary']['processing_date']}
-                  
-                  ## Generated Clips
-                  """
-                  
-                  for clip in report["clips"]:
-                      readme += f"\n### Clip {clip['clip_number']}: {clip['title']}"
-                      readme += f"\n- Duration: {clip['duration']:.1f}s"
-                      readme += f"\n- Viral Score: {clip['viral_score']:.1f}/100"
-                      readme += f"\n- Time Range: {clip['start_time']:.1f}s to {clip['end_time']:.1f}s"
-                  
-                  readme += f"""
-                  
-                  ## Platform Recommendations
-                  - **Best Posting Times**: {', '.join(report['recommendations']['best_posting_times'])}
-                  - **Optimal Duration**: {report['recommendations']['optimal_duration'][0]}-{report['recommendations']['optimal_duration'][1]} seconds
-                  - **Suggested Hashtags**: {', '.join(report['recommendations']['suggested_hashtags'][:5])}
-                  
-                  ## AI Models Used
-                  - **GPT Model**: {config.GPT_MODEL}
-                  - **Whisper Model**: {config.WHISPER_MODEL}
-                  
-                  ## Next Steps
-                  1. Review the generated clips
-                  2. Customize captions if needed
-                  3. Post at recommended times
-                  4. Monitor engagement metrics
-                  """
-                  
-                  return readme
-          
-          # ============================================================================
-          # MAIN PIPELINE
-          # ============================================================================
-          
-          class AIDirectorPipeline:
-              """Main pipeline orchestrator"""
+          # ========== UTILITY CLASSES ==========
+          class PerformanceMonitor:
+              """Monitor system performance and resources"""
               
               def __init__(self):
                   self.start_time = time.time()
-                  self.video_path = config.WORK_DIR / "source_video.mp4"
+                  self.stages = {}
+                  self.resource_usage = []
                   
-                  # Initialize components
-                  self.downloader = VideoDownloader()
-                  self.audio_processor = AudioProcessor()
-                  self.ai_director = AIDirector()
-                  self.video_editor = VideoEditor()
-                  self.output_manager = OutputManager()
+              def start_stage(self, stage_name: str):
+                  """Start timing a stage"""
+                  self.stages[stage_name] = {
+                      'start': time.time(),
+                      'end': None,
+                      'duration': None
+                  }
+                  logger.info(f"{Fore.BLUE}▶️ Starting: {stage_name}{Style.RESET_ALL}")
                   
-                  # Create unique output directory
-                  timestamp = time.strftime("%Y%m%d_%H%M%S")
-                  self.output_dir = config.OUTPUT_DIR / f"shorts_{timestamp}"
-                  self.output_dir.mkdir(exist_ok=True)
+              def end_stage(self, stage_name: str):
+                  """End timing a stage"""
+                  if stage_name in self.stages:
+                      self.stages[stage_name]['end'] = time.time()
+                      duration = self.stages[stage_name]['end'] - self.stages[stage_name]['start']
+                      self.stages[stage_name]['duration'] = duration
+                      logger.info(f"{Fore.GREEN}✅ Completed: {stage_name} ({duration:.2f}s){Style.RESET_ALL}")
                   
-                  logger.info(f"🚀 AI Director Pipeline initialized")
-                  logger.info(f"📁 Output directory: {self.output_dir}")
+              def get_summary(self):
+                  """Get performance summary"""
+                  total_time = time.time() - self.start_time
+                  return {
+                      'total_time': total_time,
+                      'stages': self.stages,
+                      'average_stage_time': sum(s['duration'] for s in self.stages.values() if s['duration']) / max(len(self.stages), 1)
+                  }
+          
+          class VideoDownloader:
+              """Advanced video downloader with multi-source support"""
               
-              def run(self):
-                  """Run the complete pipeline"""
+              def __init__(self, config: Config):
+                  self.config = config
+                  
+              @retry(
+                  stop=stop_after_attempt(3),
+                  wait=wait_exponential(multiplier=1, min=2, max=10),
+                  before_sleep=lambda retry_state: logger.warning(f"Retrying download... ({retry_state.attempt_number})")
+              )
+              def download(self) -> Path:
+                  """Download video from URL"""
+                  video_path = self.config.WORKDIR / "source_video.mp4"
+                  
+                  # Check cache first
+                  url_hash = hashlib.md5(self.config.VIDEO_URL.encode()).hexdigest()
+                  cached_path = self.config.CACHE_DIR / f"{url_hash}.mp4"
+                  
+                  if cached_path.exists():
+                      logger.info(f"{Fore.YELLOW}📦 Using cached video{Style.RESET_ALL}")
+                      import shutil
+                      shutil.copy2(cached_path, video_path)
+                      return video_path
+                  
+                  logger.info(f"{Fore.CYAN}⬇️ Downloading video...{Style.RESET_ALL}")
+                  
+                  # Try multiple download methods
+                  download_success = False
+                  
+                  # Method 1: yt-dlp (best for YouTube, TikTok, Instagram)
                   try:
-                      # Step 1: Download video
-                      logger.info("=" * 50)
-                      logger.info("STEP 1: Downloading video")
-                      logger.info("=" * 50)
+                      import yt_dlp
                       
-                      if not config.VIDEO_URL:
-                          raise ValueError("No video URL provided")
+                      ydl_opts = {
+                          'format': 'best[ext=mp4]/best',
+                          'outtmpl': str(video_path.with_suffix('.%(ext)s')),
+                          'quiet': True,
+                          'no_warnings': True,
+                          'extract_flat': False,
+                          'http_headers': {
+                              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                          }
+                      }
                       
-                      success = self.downloader.download(config.VIDEO_URL, self.video_path)
-                      if not success:
-                          raise Exception("Video download failed")
+                      with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                          ydl.download([self.config.VIDEO_URL])
+                          download_success = True
+                          
+                  except Exception as e:
+                      logger.warning(f"yt-dlp failed: {e}")
+                  
+                  # Method 2: Direct download with curl
+                  if not download_success:
+                      try:
+                          subprocess.run([
+                              'curl', '-L', self.config.VIDEO_URL,
+                              '-o', str(video_path),
+                              '--connect-timeout', '30',
+                              '--max-time', '300'
+                          ], check=True, capture_output=True)
+                          download_success = True
+                      except Exception as e:
+                          logger.warning(f"Curl download failed: {e}")
+                  
+                  # Method 3: wget fallback
+                  if not download_success:
+                      try:
+                          subprocess.run([
+                              'wget', '-O', str(video_path),
+                              self.config.VIDEO_URL
+                          ], check=True, capture_output=True)
+                          download_success = True
+                      except Exception as e:
+                          logger.error(f"All download methods failed: {e}")
+                          raise
+                  
+                  # Verify download
+                  if video_path.exists() and video_path.stat().st_size > 1024:
+                      logger.info(f"{Fore.GREEN}✅ Download complete: {video_path.stat().st_size / (1024*1024):.2f} MB{Style.RESET_ALL}")
                       
-                      # Step 2: Process audio
-                      logger.info("=" * 50)
-                      logger.info("STEP 2: Processing audio")
-                      logger.info("=" * 50)
+                      # Cache the video
+                      import shutil
+                      shutil.copy2(video_path, cached_path)
                       
-                      # Extract audio
-                      audio_path = self.audio_processor.extract_audio(self.video_path)
+                      return video_path
+                  else:
+                      raise ValueError("Downloaded file is empty or doesn't exist")
+          
+          class AudioTranscriber:
+              """Whisper Medium transcriber with optimizations"""
+              
+              def __init__(self, config: Config):
+                  self.config = config
+                  self.device = self._get_device()
+                  self.model = None
+                  
+              def _get_device(self) -> str:
+                  """Determine best device for Whisper"""
+                  if self.config.ENABLE_HARDWARE_ACCEL and torch.cuda.is_available():
+                      gpu_name = torch.cuda.get_device_name(0)
+                      logger.info(f"{Fore.MAGENTA}🎮 GPU Detected: {gpu_name}{Style.RESET_ALL}")
+                      return "cuda"
+                  elif torch.backends.mps.is_available():
+                      logger.info(f"{Fore.MAGENTA}🍎 Apple Silicon GPU Detected{Style.RESET_ALL}")
+                      return "mps"
+                  else:
+                      logger.info(f"{Fore.YELLOW}⚙️ Using CPU (No GPU available){Style.RESET_ALL}")
+                      return "cpu"
+              
+              @retry(
+                  stop=stop_after_attempt(2),
+                  wait=wait_exponential(multiplier=2, min=4, max=20)
+              )
+              def transcribe(self, video_path: Path) -> List[Dict]:
+                  """Transcribe audio using Whisper Medium"""
+                  logger.info(f"{Fore.CYAN}👂 Loading Whisper Medium model...{Style.RESET_ALL}")
+                  
+                  try:
+                      # Load model with optimizations
+                      self.model = whisper.load_model(
+                          self.config.WHISPER_MODEL,
+                          device=self.device,
+                          download_root=str(self.config.CACHE_DIR)
+                      )
                       
-                      # Transcribe with Whisper Medium
-                      segments = self.audio_processor.transcribe(audio_path)
+                      # Transcribe with optimizations
+                      logger.info(f"{Fore.CYAN}🔊 Transcribing audio...{Style.RESET_ALL}")
                       
-                      if not segments:
-                          raise Exception("No speech segments found")
+                      result = self.model.transcribe(
+                          str(video_path),
+                          fp16=(self.device == "cuda"),
+                          verbose=False,
+                          language="id",  # Auto-detect Indonesian/English
+                          task="transcribe",
+                          temperature=0.0,
+                          best_of=5,
+                          beam_size=5,
+                          compression_ratio_threshold=2.4,
+                          logprob_threshold=-1.0,
+                          no_speech_threshold=0.6
+                      )
                       
-                      # Step 3: AI Analysis
-                      logger.info("=" * 50)
-                      logger.info("STEP 3: AI Director Analysis")
-                      logger.info("=" * 50)
+                      segments = result.get("segments", [])
                       
-                      decisions = self.ai_director.analyze_and_decide(segments)
+                      # Clean up memory
+                      del self.model
+                      gc.collect()
+                      if self.device == "cuda":
+                          torch.cuda.empty_cache()
                       
-                      if not decisions:
-                          raise Exception("No clip decisions generated")
+                      logger.info(f"{Fore.GREEN}✅ Transcription complete: {len(segments)} segments{Style.RESET_ALL}")
                       
-                      # Step 4: Create clips
-                      logger.info("=" * 50)
-                      logger.info(f"STEP 4: Creating {len(decisions)} clips")
-                      logger.info("=" * 50)
+                      # Enhance segments with additional metadata
+                      enhanced_segments = []
+                      for seg in segments:
+                          enhanced_segments.append({
+                              'start': float(seg['start']),
+                              'end': float(seg['end']),
+                              'text': seg['text'].strip(),
+                              'confidence': float(seg.get('avg_logprob', 0.5)),
+                              'no_speech_prob': float(seg.get('no_speech_prob', 0.1)),
+                              'words': seg.get('words', []),
+                              'duration': float(seg['end'] - seg['start'])
+                          })
                       
-                      created_clips = []
-                      for i, decision in enumerate(decisions):
-                          try:
-                              # Create filename
-                              title = decision.get("title", f"clip_{i+1}")
-                              safe_title = self.output_manager.sanitize_filename(title)
-                              filename = f"{i+1:03d}_{safe_title}.mp4"
-                              output_path = self.output_dir / filename
-                              
-                              # Create clip
-                              success = self.video_editor.create_clip(
-                                  self.video_path, decision, output_path
-                              )
-                              
-                              if success:
-                                  # Optimize for platform
-                                  self.video_editor.optimize_for_platform(output_path, decision)
-                                  
-                                  # Save metadata
-                                  metadata_path = self.output_manager.save_metadata(
-                                      decision, output_path, i
-                                  )
-                                  
-                                  created_clips.append({
-                                      "decision": decision,
-                                      "video_path": output_path,
-                                      "metadata_path": metadata_path
-                                  })
-                                  
-                                  logger.info(f"✅ Clip {i+1}/{len(decisions)} created successfully")
-                              else:
-                                  logger.warning(f"⚠️ Failed to create clip {i+1}")
-                                  
-                          except Exception as e:
-                              logger.error(f"❌ Error creating clip {i+1}: {e}")
-                              continue
+                      return enhanced_segments
                       
-                      # Step 5: Generate report
-                      logger.info("=" * 50)
-                      logger.info("STEP 5: Generating report")
-                      logger.info("=" * 50)
+                  except Exception as e:
+                      logger.error(f"{Fore.RED}❌ Transcription failed: {e}{Style.RESET_ALL}")
+                      raise
+              
+              def analyze_audio_patterns(self, segments: List[Dict]) -> Dict:
+                  """Analyze audio patterns for virality detection"""
+                  if not segments:
+                      return {}
+                  
+                  # Calculate speech density
+                  total_duration = max(seg['end'] for seg in segments)
+                  speech_duration = sum(seg['duration'] for seg in segments)
+                  speech_density = speech_duration / total_duration if total_duration > 0 else 0
+                  
+                  # Detect emotional keywords
+                  emotional_keywords = ['wow', 'amazing', 'crazy', 'unbelievable', 'shocking', 
+                                      'hilarious', 'sad', 'angry', 'happy', 'excited']
+                  
+                  emotional_segments = []
+                  for seg in segments:
+                      text_lower = seg['text'].lower()
+                      emotion_score = sum(1 for kw in emotional_keywords if kw in text_lower)
+                      if emotion_score > 0:
+                          emotional_segments.append({
+                              'start': seg['start'],
+                              'score': emotion_score,
+                              'text': seg['text']
+                          })
+                  
+                  return {
+                      'total_segments': len(segments),
+                      'speech_density': round(speech_density, 3),
+                      'emotional_segments_count': len(emotional_segments),
+                      'emotional_segments': emotional_segments[:5],  # Top 5
+                      'average_segment_duration': sum(s['duration'] for s in segments) / len(segments),
+                      'confidence_avg': sum(s['confidence'] for s in segments) / len(segments)
+                  }
+          
+          class AIDirector:
+              """GPT-4 powered AI Director with enhanced capabilities"""
+              
+              def __init__(self, config: Config):
+                  self.config = config
+                  self.llm = None
+                  self.parser = JsonOutputParser()
+                  
+              def _init_llm(self):
+                  """Initialize LLM with retry configuration"""
+                  try:
+                      self.llm = ChatOpenAI(
+                          model=self.config.GPT_MODEL,
+                          temperature=self.config.TEMPERATURE,
+                          max_tokens=self.config.MAX_TOKENS,
+                          openai_api_key=self.config.OPENAI_API_KEY,
+                          openai_api_base=self.config.OPENAI_API_BASE,
+                          timeout=120,
+                          max_retries=10,
+                          streaming=False
+                      )
+                      return True
+                  except Exception as e:
+                      logger.error(f"{Fore.RED}❌ LLM initialization failed: {e}{Style.RESET_ALL}")
+                      return False
+              
+              @retry(
+                  stop=stop_after_attempt(config.MAX_RETRIES),
+                  wait=wait_exponential(multiplier=2, min=3, max=60),
+                  retry=retry_if_exception_type((Exception,)),
+                  before_sleep=lambda retry_state: logger.warning(
+                      f"Retry attempt {retry_state.attempt_number} for AI analysis..."
+                  )
+              )
+              def analyze_and_select_clips(self, segments: List[Dict], audio_analysis: Dict) -> List[Dict]:
+                  """Analyze content and select best clips using GPT-4"""
+                  logger.info(f"{Fore.CYAN}🧠 AI Director analyzing content...{Style.RESET_ALL}")
+                  
+                  if not self.llm:
+                      if not self._init_llm():
+                          raise RuntimeError("Failed to initialize LLM")
+                  
+                  # Prepare transcript for AI
+                  transcript = self._prepare_transcript(segments)
+                  
+                  # Get platform-specific viral triggers
+                  platform_preset = self.config.PLATFORM_PRESETS[self.config.TARGET_PLATFORM]
+                  viral_triggers = platform_preset['viral_triggers']
+                  
+                  # Create enhanced prompt
+                  prompt_template = ChatPromptTemplate.from_template("""
+                  ANDA ADALAH AI DIRECTOR PRO dengan spesialisasi konten viral untuk {platform_name}.
+                  
+                  MISSION: Pilih {num_clips} klip TERBAIK dari video dengan analisis mendalam.
+                  
+                  📊 DATA INPUT:
+                  1. TRANSCRIPT (dengan timestamp):
+                  {transcript}
+                  
+                  2. ANALISIS AUDIO:
+                  {audio_analysis}
+                  
+                  3. PLATFORM TARGET: {platform_name}
+                  - Durasi ideal: {ideal_duration}s
+                  - Viral triggers: {viral_triggers}
+                  
+                  🎯 KRITERIA SELEKSI (prioritas tinggi ke rendah):
+                  1. HOOK POWER (10 detik pertama harus menarik)
+                  2. EMOTIONAL IMPACT (sedih, senang, terkejut, marah)
+                  3. STORY COMPLETENESS (ada awal, tengah, akhir)
+                  4. SHAREABILITY (orang ingin membagikan)
+                  5. TREND ALIGNMENT (cocok dengan tren {platform_name})
+                  
+                  🔍 ANALISIS PER KLIP HARUS MENCANGKUP:
+                  - Hook analysis (mengapa menarik di 3 detik pertama)
+                  - Emotional journey (emosi apa yang muncul)
+                  - Viral potential score (1-100)
+                  - Platform optimization strategy
+                  - Editing suggestions (text, effects, music)
+                  
+                  📝 OUTPUT FORMAT (JSON array):
+                  [
+                    {
+                      "clip_id": "clip_1",
+                      "start_time": 45.2,
+                      "end_time": 52.8,
+                      "duration": 7.6,
+                      "title": "Judul Clickbait yang Menarik",
+                      "hook_analysis": "Analisis mengapa hook kuat...",
+                      "emotional_arc": ["curiosity", "surprise", "satisfaction"],
+                      "viral_score": 92,
+                      "viral_reasons": ["emotional", "relatable", "surprising"],
+                      "platform_optimization": {
+                        "caption": "Caption yang engaging...",
+                        "hashtags": ["#fyp", "#viral"],
+                        "text_overlays": [
+                          {"text": "INI GILA!", "time": 0.5, "duration": 2}
+                        ],
+                        "editing_style": "fast_cuts",
+                        "music_suggestion": "epic_trailer"
+                      },
+                      "seo_metadata": {
+                        "keywords": ["keyword1", "keyword2"],
+                        "description": "Deskripsi untuk SEO..."
+                      }
+                    }
+                  ]
+                  
+                  ⚠️ ATURAN PENTING:
+                  1. Setiap klip harus berdiri sendiri (self-contained)
+                  2. Hindari potongan kata di awal/akhir
+                  3. Durasi antara {min_duration} - {max_duration} detik
+                  4. Prioritaskan konten dengan emosi kuat
+                  5. Berikan variasi jenis konten
+                  
+                  Pastikan output HANYA JSON tanpa teks tambahan.
+                  """)
+                  
+                  messages = prompt_template.format_messages(
+                      platform_name=platform_preset['name'],
+                      num_clips=self.config.NUM_SHORTS,
+                      transcript=transcript[:15000],  # Limit transcript size
+                      audio_analysis=json.dumps(audio_analysis, ensure_ascii=False),
+                      viral_triggers=", ".join(viral_triggers),
+                      ideal_duration=platform_preset['ideal_duration'],
+                      min_duration=platform_preset['min_duration'],
+                      max_duration=platform_preset['max_duration']
+                  )
+                  
+                  try:
+                      response = self.llm.invoke(messages)
                       
-                      if created_clips:
-                          report_path = self.output_manager.generate_report(
-                              [c["decision"] for c in created_clips],
-                              self.output_dir
+                      # Parse JSON response
+                      try:
+                          clips = json.loads(response.content)
+                      except json.JSONDecodeError:
+                          # Try to extract JSON from text
+                          json_match = re.search(r'\[.*\]', response.content, re.DOTALL)
+                          if json_match:
+                              clips = json.loads(json_match.group())
+                          else:
+                              raise ValueError("No valid JSON found in response")
+                      
+                      # Validate and enhance clips
+                      validated_clips = []
+                      for i, clip in enumerate(clips):
+                          if self._validate_clip(clip):
+                              clip['clip_id'] = f"clip_{i+1:03d}"
+                              clip['generated_at'] = datetime.now().isoformat()
+                              clip['platform'] = self.config.TARGET_PLATFORM
+                              validated_clips.append(clip)
+                      
+                      logger.info(f"{Fore.GREEN}✅ AI Director selected {len(validated_clips)} clips{Style.RESET_ALL}")
+                      return validated_clips[:self.config.NUM_SHORTS]
+                      
+                  except Exception as e:
+                      logger.error(f"{Fore.RED}❌ AI analysis failed: {e}{Style.RESET_ALL}")
+                      logger.error(f"Response: {response.content if 'response' in locals() else 'No response'}")
+                      raise
+              
+              def _prepare_transcript(self, segments: List[Dict]) -> str:
+                  """Prepare transcript for AI analysis"""
+                  transcript_lines = []
+                  
+                  for seg in segments[:200]:  # Limit to 200 segments
+                      start_min = int(seg['start'] // 60)
+                      start_sec = int(seg['start'] % 60)
+                      text = seg['text'].strip()
+                      
+                      if text and len(text) > 3:
+                          transcript_lines.append(
+                              f"[{start_min:02d}:{start_sec:02d}] {text}"
                           )
-                          logger.info(f"📊 Report generated: {report_path}")
-                      
-                      # Calculate total time
-                      total_time = time.time() - self.start_time
-                      logger.info(f"✅ Pipeline completed in {total_time:.1f} seconds")
-                      logger.info(f"📁 Output saved to: {self.output_dir}")
-                      
-                      return True, self.output_dir
-                      
-                  except Exception as e:
-                      logger.error(f"❌ Pipeline failed: {e}")
-                      return False, str(e)
+                  
+                  return "\n".join(transcript_lines)
               
-              def cleanup(self):
-                  """Cleanup temporary files"""
+              def _validate_clip(self, clip: Dict) -> bool:
+                  """Validate clip structure"""
+                  required_fields = ['start_time', 'end_time', 'title']
+                  
+                  for field in required_fields:
+                      if field not in clip:
+                          logger.warning(f"Clip missing required field: {field}")
+                          return False
+                  
+                  # Validate times
                   try:
-                      # Keep source video but delete audio file
-                      audio_path = config.WORK_DIR / "audio.wav"
-                      if audio_path.exists():
-                          audio_path.unlink()
+                      start = float(clip['start_time'])
+                      end = float(clip['end_time'])
                       
-                      logger.info("🧹 Cleanup completed")
-                  except Exception as e:
-                      logger.warning(f"Cleanup warning: {e}")
-          
-          # ============================================================================
-          # MAIN EXECUTION
-          # ============================================================================
-          
-          if __name__ == "__main__":
-              logger.info("🎬 AI Director Pro - Starting Pipeline")
-              logger.info(f"🤖 Models: GPT-4 + Whisper Medium")
+                      if start >= end:
+                          logger.warning(f"Invalid time range: {start} >= {end}")
+                          return False
+                          
+                      duration = end - start
+                      platform_preset = self.config.PLATFORM_PRESETS[self.config.TARGET_PLATFORM]
+                      
+                      if duration < platform_preset['min_duration']:
+                          logger.warning(f"Duration too short: {duration}s")
+                          return False
+                          
+                      if duration > platform_preset['max_duration']:
+                          # Auto-adjust if too long
+                          clip['end_time'] = start + platform_preset['ideal_duration']
+                          clip['duration'] = platform_preset['ideal_duration']
+                      
+                  except (ValueError, TypeError):
+                      logger.warning("Invalid time values")
+                      return False
+                  
+                  return True
               
-              pipeline = AIDirectorPipeline()
+              def generate_fallback_clips(self, segments: List[Dict]) -> List[Dict]:
+                  """Generate fallback clips if AI fails"""
+                  logger.warning(f"{Fore.YELLOW}⚠️ Using fallback clip generation{Style.RESET_ALL}")
+                  
+                  fallback_clips = []
+                  platform_preset = self.config.PLATFORM_PRESETS[self.config.TARGET_PLATFORM]
+                  
+                  # Find segments with emotional content
+                  emotional_keywords = ['wow', 'amazing', 'crazy', 'unbelievable', 'shocking']
+                  
+                  emotional_segments = []
+                  for seg in segments:
+                      text_lower = seg['text'].lower()
+                      if any(kw in text_lower for kw in emotional_keywords):
+                          emotional_segments.append(seg)
+                  
+                  # Use emotional segments or sample evenly
+                  source_segments = emotional_segments if emotional_segments else segments
+                  
+                  if not source_segments:
+                      # Create artificial clips
+                      video_duration = segments[-1]['end'] if segments else 300
+                      clip_duration = platform_preset['ideal_duration']
+                      
+                      for i in range(min(self.config.NUM_SHORTS, 5)):
+                          start = i * (video_duration / min(self.config.NUM_SHORTS, 5))
+                          end = start + clip_duration
+                          
+                          fallback_clips.append({
+                              'clip_id': f"fallback_{i+1:03d}",
+                              'start_time': start,
+                              'end_time': end,
+                              'duration': clip_duration,
+                              'title': f"Viral Moment {i+1}",
+                              'hook_analysis': "Auto-generated clip",
+                              'viral_score': 70,
+                              'platform_optimization': {
+                                  'caption': "Check this out! 👀",
+                                  'hashtags': platform_preset['hashtags'][:3]
+                              }
+                          })
+                  else:
+                      # Create clips from segments
+                      import random
+                      
+                      for i in range(min(self.config.NUM_SHORTS, len(source_segments))):
+                          seg = source_segments[i] if i < len(source_segments) else random.choice(source_segments)
+                          
+                          start = seg['start']
+                          end = min(start + platform_preset['ideal_duration'], seg['end'] + 5)
+                          
+                          fallback_clips.append({
+                              'clip_id': f"fallback_{i+1:03d}",
+                              'start_time': start,
+                              'end_time': end,
+                              'duration': end - start,
+                              'title': f"Highlight {i+1}: {seg['text'][:30]}...",
+                              'hook_analysis': "Segment with potential viral content",
+                              'viral_score': 60 + random.randint(0, 30),
+                              'platform_optimization': {
+                                  'caption': f"{seg['text'][:100]}...",
+                                  'hashtags': platform_preset['hashtags'][:3]
+                              }
+                          })
+                  
+                  return fallback_clips
+          
+          class VideoProducer:
+              """Professional video production with FFmpeg"""
+              
+              def __init__(self, config: Config):
+                  self.config = config
+                  self.platform_preset = config.PLATFORM_PRESETS[config.TARGET_PLATFORM]
+                  
+              def produce_clips(self, video_path: Path, clips: List[Dict]) -> List[Dict]:
+                  """Produce all video clips"""
+                  logger.info(f"{Fore.CYAN}🎬 Producing {len(clips)} video clips...{Style.RESET_ALL}")
+                  
+                  produced_clips = []
+                  
+                  with ThreadPoolExecutor(max_workers=self.config.WORKER_THREADS) as executor:
+                      futures = []
+                      
+                      for clip in clips:
+                          future = executor.submit(
+                              self._produce_single_clip,
+                              video_path,
+                              clip
+                          )
+                          futures.append((future, clip))
+                      
+                      # Monitor progress
+                      for future, clip in tqdm(futures, desc="Producing clips", unit="clip"):
+                          try:
+                              result = future.result(timeout=300)  # 5 min timeout
+                              if result:
+                                  produced_clips.append(result)
+                                  logger.info(f"{Fore.GREEN}✅ Produced: {result['output_filename']}{Style.RESET_ALL}")
+                          except Exception as e:
+                              logger.error(f"{Fore.RED}❌ Failed to produce clip {clip.get('clip_id', 'unknown')}: {e}{Style.RESET_ALL}")
+                  
+                  return produced_clips
+              
+              def _produce_single_clip(self, video_path: Path, clip: Dict) -> Optional[Dict]:
+                  """Produce a single video clip"""
+                  try:
+                      # Generate output filename
+                      safe_title = self._sanitize_filename(clip.get('title', 'clip'))
+                      timestamp = datetime.now().strftime("%H%M%S")
+                      output_filename = f"{safe_title[:50]}_{timestamp}.mp4"
+                      output_path = self.config.OUTDIR / output_filename
+                      
+                      # Get clip parameters
+                      start_time = float(clip['start_time'])
+                      duration = float(clip.get('duration', clip['end_time'] - clip['start_time']))
+                      
+                      # Adjust duration to platform limits
+                      max_duration = self.platform_preset['max_duration']
+                      if duration > max_duration:
+                          duration = max_duration
+                          clip['end_time'] = start_time + duration
+                      
+                      # Build FFmpeg command based on quality preset
+                      ffmpeg_cmd = self._build_ffmpeg_command(
+                          video_path, start_time, duration, output_path
+                      )
+                      
+                      # Execute FFmpeg
+                      logger.debug(f"FFmpeg command: {' '.join(ffmpeg_cmd)}")
+                      
+                      process = subprocess.run(
+                          ffmpeg_cmd,
+                          capture_output=True,
+                          text=True,
+                          timeout=300
+                      )
+                      
+                      if process.returncode != 0:
+                          logger.error(f"FFmpeg error: {process.stderr[:500]}")
+                          return None
+                      
+                      # Verify output
+                      if not output_path.exists() or output_path.stat().st_size < 1024:
+                          logger.error(f"Output file too small or doesn't exist")
+                          return None
+                      
+                      # Add enhancements if specified
+                      if clip.get('platform_optimization', {}).get('text_overlays'):
+                          self._add_text_overlays(output_path, clip)
+                      
+                      # Optimize for platform
+                      self._optimize_for_platform(output_path)
+                      
+                      # Update clip metadata
+                      clip['output_filename'] = output_filename
+                      clip['output_path'] = str(output_path)
+                      clip['file_size_mb'] = output_path.stat().st_size / (1024 * 1024)
+                      clip['production_time'] = datetime.now().isoformat()
+                      clip['quality_preset'] = self.config.QUALITY_PRESET
+                      
+                      # Save metadata
+                      metadata_path = output_path.with_suffix('.json')
+                      with open(metadata_path, 'w', encoding='utf-8') as f:
+                          json.dump(clip, f, indent=2, ensure_ascii=False)
+                      
+                      return clip
+                      
+                  except Exception as e:
+                      logger.error(f"Clip production failed: {e}")
+                      return None
+              
+              def _build_ffmpeg_command(self, video_path: Path, start: float, 
+                                       duration: float, output_path: Path) -> List[str]:
+                  """Build optimized FFmpeg command"""
+                  
+                  # Base command
+                  cmd = [
+                      'ffmpeg', '-y',
+                      '-ss', str(start),
+                      '-i', str(video_path),
+                      '-t', str(duration)
+                  ]
+                  
+                  # Quality presets
+                  quality_configs = {
+                      'fast': {
+                          'video_codec': 'libx264',
+                          'preset': 'ultrafast',
+                          'crf': '28',
+                          'tune': 'fastdecode',
+                          'audio_bitrate': '96k'
+                      },
+                      'balanced': {
+                          'video_codec': 'libx264',
+                          'preset': 'fast',
+                          'crf': '23',
+                          'tune': 'film',
+                          'audio_bitrate': '128k'
+                      },
+                      'high': {
+                          'video_codec': 'libx264',
+                          'preset': 'slow',
+                          'crf': '18',
+                          'tune': 'film',
+                          'audio_bitrate': '192k'
+                      }
+                  }
+                  
+                  config = quality_configs.get(self.config.QUALITY_PRESET, quality_configs['balanced'])
+                  
+                  # Platform-specific adjustments
+                  bitrate = self.platform_preset['bitrate']
+                  fps = str(self.platform_preset['fps'])
+                  resolution = self.platform_preset['resolution']
+                  
+                  # Add filters for platform optimization
+                  filters = [
+                      f'scale={resolution}:force_original_aspect_ratio=increase',
+                      'crop=iw:ih:0:0',
+                      f'fps={fps}',
+                      'format=yuv420p'
+                  ]
+                  
+                  # Add color correction for better visuals
+                  if self.config.QUALITY_PRESET != 'fast':
+                      filters.extend([
+                          'eq=brightness=0.05:contrast=1.1:saturation=1.1',
+                          'unsharp=3:3:0.5:3:3:0.5'
+                      ])
+                  
+                  filter_chain = ','.join(filters)
+                  
+                  # Complete command
+                  cmd.extend([
+                      '-c:v', config['video_codec'],
+                      '-preset', config['preset'],
+                      '-crf', config['crf'],
+                      '-tune', config['tune'],
+                      '-b:v', bitrate,
+                      '-maxrate', bitrate,
+                      '-bufsize', f'{int(bitrate[:-1]) * 2}k',
+                      '-c:a', 'aac',
+                      '-b:a', config['audio_bitrate'],
+                      '-ar', '48000',
+                      '-ac', '2',
+                      '-movflags', '+faststart',
+                      '-vf', filter_chain,
+                      '-threads', str(self.config.WORKER_THREADS),
+                      str(output_path)
+                  ])
+                  
+                  return cmd
+              
+              def _add_text_overlays(self, video_path: Path, clip: Dict):
+                  """Add text overlays to video"""
+                  try:
+                      text_overlays = clip['platform_optimization'].get('text_overlays', [])
+                      if not text_overlays:
+                          return
+                      
+                      # Simple text overlay using FFmpeg
+                      overlay_video = video_path.with_name(f"text_{video_path.name}")
+                      
+                      overlay_filters = []
+                      for i, overlay in enumerate(text_overlays[:3]):  # Max 3 overlays
+                          text = overlay.get('text', '').replace('"', '\\"')
+                          start = overlay.get('time', 0)
+                          duration = overlay.get('duration', 3)
+                          
+                          overlay_filters.append(
+                              f"drawtext=text='{text}':fontsize=60:fontcolor=white:"
+                              f"bordercolor=black:borderw=3:x=(w-text_w)/2:y=h*0.1:"
+                              f"enable='between(t,{start},{start + duration})'"
+                          )
+                      
+                      if overlay_filters:
+                          filter_chain = ','.join(overlay_filters)
+                          
+                          subprocess.run([
+                              'ffmpeg', '-y', '-i', str(video_path),
+                              '-vf', filter_chain,
+                              '-c:a', 'copy',
+                              str(overlay_video)
+                          ], capture_output=True, timeout=60)
+                          
+                          # Replace original with overlay version
+                          if overlay_video.exists():
+                              video_path.unlink()
+                              overlay_video.rename(video_path)
+                              
+                  except Exception as e:
+                      logger.warning(f"Text overlay failed: {e}")
+              
+              def _optimize_for_platform(self, video_path: Path):
+                  """Optimize video file for target platform"""
+                  try:
+                      max_size_mb = self.platform_preset['max_size_mb']
+                      current_size_mb = video_path.stat().st_size / (1024 * 1024)
+                      
+                      if current_size_mb <= max_size_mb:
+                          return
+                      
+                      logger.info(f"📦 Compressing {current_size_mb:.1f}MB to {max_size_mb}MB")
+                      
+                      compressed_path = video_path.with_name(f"compressed_{video_path.name}")
+                      
+                      # Calculate target bitrate
+                      video_info = self._get_video_info(video_path)
+                      duration = float(video_info.get('duration', 30))
+                      target_bitrate = int((max_size_mb * 8192) / duration)
+                      
+                      subprocess.run([
+                          'ffmpeg', '-y', '-i', str(video_path),
+                          '-c:v', 'libx264',
+                          '-preset', 'veryfast',
+                          '-b:v', f'{target_bitrate}k',
+                          '-maxrate', f'{target_bitrate * 1.5}k',
+                          '-bufsize', f'{target_bitrate * 2}k',
+                          '-c:a', 'aac',
+                          '-b:a', '96k',
+                          str(compressed_path)
+                      ], capture_output=True, timeout=180)
+                      
+                      if compressed_path.exists():
+                          video_path.unlink()
+                          compressed_path.rename(video_path)
+                          
+                  except Exception as e:
+                      logger.warning(f"Compression failed: {e}")
+              
+              def _get_video_info(self, video_path: Path) -> Dict:
+                  """Get video information using FFprobe"""
+                  try:
+                      result = subprocess.run([
+                          'ffprobe', '-v', 'quiet',
+                          '-print_format', 'json',
+                          '-show_format', '-show_streams',
+                          str(video_path)
+                      ], capture_output=True, text=True, check=True)
+                      
+                      return json.loads(result.stdout)
+                  except:
+                      return {}
+              
+              def _sanitize_filename(self, filename: str) -> str:
+                  """Sanitize filename for safe filesystem use"""
+                  # Remove invalid characters
+                  sanitized = re.sub(r'[<>:"/\\|?*]', '', filename)
+                  # Replace multiple spaces with single underscore
+                  sanitized = re.sub(r'\s+', '_', sanitized)
+                  # Remove leading/trailing underscores
+                  sanitized = sanitized.strip('_')
+                  # Limit length
+                  return sanitized[:100]
+          
+          class ReportGenerator:
+              """Generate comprehensive production reports"""
+              
+              def __init__(self, config: Config):
+                  self.config = config
+                  
+              def generate(self, clips: List[Dict], performance_data: Dict) -> Dict:
+                  """Generate production report"""
+                  logger.info(f"{Fore.CYAN}📊 Generating production report...{Style.RESET_ALL}")
+                  
+                  total_viral_score = sum(c.get('viral_score', 0) for c in clips)
+                  avg_viral_score = total_viral_score / max(len(clips), 1)
+                  
+                  report = {
+                      'generation_info': {
+                          'timestamp': datetime.now().isoformat(),
+                          'workflow_run_id': os.getenv('GITHUB_RUN_ID', 'local'),
+                          'repository': os.getenv('GITHUB_REPOSITORY', 'local'),
+                          'commit_sha': os.getenv('GITHUB_SHA', 'local')
+                      },
+                      'configuration': {
+                          'platform': self.config.TARGET_PLATFORM,
+                          'num_shorts_target': self.config.NUM_SHORTS,
+                          'num_shorts_produced': len(clips),
+                          'quality_preset': self.config.QUALITY_PRESET,
+                          'gpt_model': self.config.GPT_MODEL,
+                          'whisper_model': self.config.WHISPER_MODEL
+                      },
+                      'performance_metrics': {
+                          'total_processing_time': performance_data.get('total_time', 0),
+                          'average_clip_viral_score': round(avg_viral_score, 1),
+                          'clips_by_viral_score': {
+                              'excellent': sum(1 for c in clips if c.get('viral_score', 0) >= 85),
+                              'good': sum(1 for c in clips if 70 <= c.get('viral_score', 0) < 85),
+                              'average': sum(1 for c in clips if c.get('viral_score', 0) < 70)
+                          },
+                          'total_output_size_mb': sum(c.get('file_size_mb', 0) for c in clips),
+                          'average_clip_size_mb': sum(c.get('file_size_mb', 0) for c in clips) / max(len(clips), 1),
+                          'average_clip_duration': sum(c.get('duration', 0) for c in clips) / max(len(clips), 1)
+                      },
+                      'clips_summary': [
+                          {
+                              'clip_id': c.get('clip_id'),
+                              'filename': c.get('output_filename'),
+                              'duration': c.get('duration'),
+                              'viral_score': c.get('viral_score'),
+                              'title': c.get('title'),
+                              'file_size_mb': round(c.get('file_size_mb', 0), 2)
+                          }
+                          for c in clips
+                      ],
+                      'recommendations': self._generate_recommendations(clips),
+                      'ai_insights': self._extract_ai_insights(clips)
+                  }
+                  
+                  # Save report
+                  report_path = self.config.OUTDIR / 'production_report.json'
+                  with open(report_path, 'w', encoding='utf-8') as f:
+                      json.dump(report, f, indent=2, ensure_ascii=False)
+                  
+                  # Generate markdown summary
+                  self._generate_markdown_summary(report)
+                  
+                  logger.info(f"{Fore.GREEN}✅ Report generated: {report_path}{Style.RESET_ALL}")
+                  return report
+              
+              def _generate_recommendations(self, clips: List[Dict]) -> List[str]:
+                  """Generate posting recommendations"""
+                  recommendations = []
+                  
+                  if not clips:
+                      return ["No clips produced"]
+                  
+                  # Sort by viral score
+                  sorted_clips = sorted(clips, key=lambda x: x.get('viral_score', 0), reverse=True)
+                  
+                  # Platform-specific recommendations
+                  platform = self.config.TARGET_PLATFORM
+                  
+                  if platform == 'tiktok':
+                      recommendations.extend([
+                          "Post during peak hours: 7-9 PM local time",
+                          "Use trending sounds from TikTok library",
+                          "Engage with comments in first hour",
+                          "Use 3-5 relevant hashtags",
+                          "Post 1-2 times daily for maximum reach"
+                      ])
+                  elif platform == 'youtube_shorts':
+                      recommendations.extend([
+                          "Add end screen to promote other shorts",
+                          "Use YouTube's built-in editing tools",
+                          "Create a shorts playlist",
+                          "Cross-promote on community tab",
+                          "Use descriptive titles with keywords"
+                      ])
+                  elif platform == 'instagram_reels':
+                      recommendations.extend([
+                          "Use Instagram's trending audio",
+                          "Add interactive stickers (polls, questions)",
+                          "Share to stories after posting",
+                          "Collaborate with similar accounts",
+                          "Use relevant Reels templates"
+                      ])
+                  
+                  # Content-specific recommendations
+                  viral_scores = [c.get('viral_score', 0) for c in clips]
+                  avg_score = sum(viral_scores) / len(viral_scores)
+                  
+                  if avg_score >= 80:
+                      recommendations.append("Excellent viral potential! Consider boosting top-performing clips")
+                  elif avg_score >= 65:
+                      recommendations.append("Good content quality. Test different posting times")
+                  else:
+                      recommendations.append("Consider adding more text overlays and effects to increase engagement")
+                  
+                  return recommendations[:5]  # Limit to top 5
+              
+              def _extract_ai_insights(self, clips: List[Dict]) -> Dict:
+                  """Extract insights from AI analysis"""
+                  if not clips:
+                      return {}
+                  
+                  # Extract common viral reasons
+                  viral_reasons = []
+                  for clip in clips:
+                      reasons = clip.get('viral_reasons', [])
+                      if isinstance(reasons, list):
+                          viral_reasons.extend(reasons)
+                  
+                  # Count occurrences
+                  from collections import Counter
+                  reason_counts = Counter(viral_reasons)
+                  
+                  # Extract emotional patterns
+                  emotional_patterns = []
+                  for clip in clips:
+                      emotions = clip.get('emotional_arc', [])
+                      if isinstance(emotions, list):
+                          emotional_patterns.extend(emotions)
+                  
+                  emotion_counts = Counter(emotional_patterns)
+                  
+                  return {
+                      'top_viral_factors': dict(reason_counts.most_common(5)),
+                      'emotional_patterns': dict(emotion_counts.most_common(5)),
+                      'average_hook_strength': sum(1 for c in clips if 'hook' in str(c).lower()) / len(clips),
+                      'content_variety_score': len(set(str(c.get('title', '')) for c in clips)) / len(clips)
+                  }
+              
+              def _generate_markdown_summary(self, report: Dict):
+                  """Generate markdown summary for GitHub"""
+                  summary_path = self.config.OUTDIR / 'SUMMARY.md'
+                  
+                  with open(summary_path, 'w', encoding='utf-8') as f:
+                      f.write("# 🎬 AI Director Ultra - Production Summary\n\n")
+                      
+                      # Basic Info
+                      f.write("## 📋 Production Overview\n")
+                      f.write(f"- **Platform**: {report['configuration']['platform']}\n")
+                      f.write(f"- **Clips Produced**: {report['configuration']['num_shorts_produced']}/{report['configuration']['num_shorts_target']}\n")
+                      f.write(f"- **Average Viral Score**: {report['performance_metrics']['average_clip_viral_score']}/100\n")
+                      f.write(f"- **Total Processing Time**: {report['performance_metrics']['total_processing_time']:.1f}s\n\n")
+                      
+                      # Clips Table
+                      f.write("## 🎥 Generated Clips\n")
+                      f.write("| Clip | Title | Duration | Viral Score | Size |\n")
+                      f.write("|------|-------|----------|-------------|------|\n")
+                      
+                      for clip in report['clips_summary']:
+                          f.write(f"| {clip['clip_id']} | {clip['title'][:30]}... | {clip['duration']:.1f}s | {clip['viral_score']} | {clip['file_size_mb']}MB |\n")
+                      
+                      f.write("\n")
+                      
+                      # Recommendations
+                      f.write("## 💡 Posting Recommendations\n")
+                      for rec in report['recommendations']:
+                          f.write(f"- {rec}\n")
+                      
+                      f.write("\n")
+                      
+                      # AI Insights
+                      f.write("## 🧠 AI Insights\n")
+                      for factor, count in report['ai_insights'].get('top_viral_factors', {}).items():
+                          f.write(f"- **{factor.title()}**: {count} clips\n")
+                  
+                  logger.info(f"{Fore.GREEN}✅ Markdown summary generated{Style.RESET_ALL}")
+          
+          # ========== MAIN EXECUTION ==========
+          async def main():
+              """Main execution pipeline"""
+              logger.info(f"{Fore.MAGENTA}🚀 AI DIRECTOR ULTRA - STARTING PRODUCTION{Style.RESET_ALL}")
+              logger.info(f"{Fore.CYAN}=" * 60 + f"{Style.RESET_ALL}")
+              
+              # Initialize performance monitor
+              monitor = PerformanceMonitor()
               
               try:
-                  success, result = pipeline.run()
+                  # ===== PHASE 1: DOWNLOAD =====
+                  monitor.start_stage("Download")
+                  downloader = VideoDownloader(config)
+                  video_path = downloader.download()
+                  monitor.end_stage("Download")
                   
-                  if success:
-                      logger.info("🎉 PIPELINE COMPLETED SUCCESSFULLY!")
-                      
-                      # List generated files
-                      if isinstance(result, Path):
-                          mp4_files = list(result.glob("*.mp4"))
-                          json_files = list(result.glob("*.json"))
-                          
-                          logger.info(f"📁 Generated {len(mp4_files)} video files")
-                          logger.info(f"📁 Generated {len(json_files)} metadata files")
-                      
-                      pipeline.cleanup()
-                      sys.exit(0)
-                  else:
-                      logger.error(f"💥 PIPELINE FAILED: {result}")
-                      pipeline.cleanup()
+                  # ===== PHASE 2: TRANSCRIPTION =====
+                  monitor.start_stage("Transcription")
+                  transcriber = AudioTranscriber(config)
+                  segments = transcriber.transcribe(video_path)
+                  audio_analysis = transcriber.analyze_audio_patterns(segments)
+                  monitor.end_stage("Transcription")
+                  
+                  if not segments:
+                      logger.error(f"{Fore.RED}❌ No segments transcribed. Exiting.{Style.RESET_ALL}")
                       sys.exit(1)
-                      
+                  
+                  # ===== PHASE 3: AI ANALYSIS =====
+                  monitor.start_stage("AI Analysis")
+                  director = AIDirector(config)
+                  
+                  clips = []
+                  try:
+                      clips = director.analyze_and_select_clips(segments, audio_analysis)
+                  except Exception as e:
+                      logger.error(f"{Fore.RED}❌ AI analysis failed, using fallback: {e}{Style.RESET_ALL}")
+                      clips = director.generate_fallback_clips(segments)
+                  
+                  monitor.end_stage("AI Analysis")
+                  
+                  if not clips:
+                      logger.error(f"{Fore.RED}❌ No clips generated. Exiting.{Style.RESET_ALL}")
+                      sys.exit(1)
+                  
+                  # ===== PHASE 4: VIDEO PRODUCTION =====
+                  monitor.start_stage("Video Production")
+                  producer = VideoProducer(config)
+                  produced_clips = producer.produce_clips(video_path, clips)
+                  monitor.end_stage("Video Production")
+                  
+                  if not produced_clips:
+                      logger.error(f"{Fore.RED}❌ No clips produced. Exiting.{Style.RESET_ALL}")
+                      sys.exit(1)
+                  
+                  # ===== PHASE 5: REPORTING =====
+                  monitor.start_stage("Reporting")
+                  report_gen = ReportGenerator(config)
+                  performance_data = monitor.get_summary()
+                  report = report_gen.generate(produced_clips, performance_data)
+                  monitor.end_stage("Reporting")
+                  
+                  # ===== FINAL SUMMARY =====
+                  logger.info(f"{Fore.MAGENTA}" + "=" * 60 + f"{Style.RESET_ALL}")
+                  logger.info(f"{Fore.GREEN}🎉 PRODUCTION COMPLETE!{Style.RESET_ALL}")
+                  logger.info(f"{Fore.CYAN}📊 Summary:{Style.RESET_ALL}")
+                  logger.info(f"  Clips Produced: {len(produced_clips)}")
+                  logger.info(f"  Average Viral Score: {report['performance_metrics']['average_clip_viral_score']}/100")
+                  logger.info(f"  Total Time: {performance_data['total_time']:.1f}s")
+                  logger.info(f"  Output Directory: {config.OUTDIR}")
+                  logger.info(f"{Fore.MAGENTA}" + "=" * 60 + f"{Style.RESET_ALL}")
+                  
+                  # Exit with success
+                  sys.exit(0)
+                  
               except KeyboardInterrupt:
-                  logger.info("Pipeline interrupted by user")
-                  pipeline.cleanup()
-                  sys.exit(1)
+                  logger.info(f"{Fore.YELLOW}⚠️ Pipeline interrupted by user{Style.RESET_ALL}")
+                  sys.exit(130)
               except Exception as e:
-                  logger.error(f"Unexpected error: {e}")
-                  pipeline.cleanup()
+                  logger.error(f"{Fore.RED}❌ FATAL ERROR: {e}{Style.RESET_ALL}")
+                  logger.exception("Stack trace:")
                   sys.exit(1)
+          
+          if __name__ == "__main__":
+              # Set up signal handlers for graceful shutdown
+              def signal_handler(signum, frame):
+                  logger.info(f"{Fore.YELLOW}⚠️ Received signal {signum}, shutting down...{Style.RESET_ALL}")
+                  sys.exit(1)
+              
+              signal.signal(signal.SIGINT, signal_handler)
+              signal.signal(signal.SIGTERM, signal_handler)
+              
+              # Run the pipeline
+              asyncio.run(main())
           
           EOF
           
-          echo "✅ AI Director script created with GPT-4 + Whisper Medium"
-      
-      - name: 🚀 Run AI Director Pipeline
-        env:
-          VIDEO_URL: ${{ github.event.inputs.video_url }}
-          NUM_SHORTS: ${{ github.event.inputs.num_shorts || 5 }}
-          TARGET_PLATFORM: ${{ github.event.inputs.platform || 'tiktok' }}
-        run: |
-          echo "Starting AI Director Pipeline..."
-          echo "Video URL: $VIDEO_URL"
-          echo "Number of Shorts: $NUM_SHORTS"
-          echo "Target Platform: $TARGET_PLATFORM"
-          echo ""
+          # Run the AI Director Ultra pipeline
+          python ai_director_ultra.py
           
-          # Run the pipeline with timeout
-          timeout 1800 python ai_director_pro.py
-          
-          EXIT_CODE=$?
-          
-          if [ $EXIT_CODE -eq 124 ]; then
-            echo "⚠️ Pipeline timed out after 30 minutes"
-            echo "Checking for partial output..."
-          elif [ $EXIT_CODE -ne 0 ]; then
-            echo "❌ Pipeline failed with exit code: $EXIT_CODE"
-          else
-            echo "✅ Pipeline completed successfully"
-          fi
-          
-          # List output files
-          if [ -d "output" ]; then
-            echo ""
-            echo "📁 Output Files:"
-            find output -type f -name "*.mp4" -o -name "*.json" | head -20
-          fi
-      
       - name: 📦 Package Output
-        if: success() || failure()
         run: |
-          # Create archive of output
+          # Create timestamped archive
           TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+          zip -r "ai_director_output_$TIMESTAMP.zip" output/ workspace/ logs/ || true
           
-          if [ -d "output" ] && [ "$(ls -A output 2>/dev/null)" ]; then
-            # Find latest output directory
-            LATEST_DIR=$(find output -maxdepth 1 -type d -name "shorts_*" | sort -r | head -1)
-            
-            if [ -n "$LATEST_DIR" ]; then
-              # Create tar archive
-              ARCHIVE_NAME="ai_director_output_${TIMESTAMP}.tar.gz"
-              tar -czf "$ARCHIVE_NAME" -C "$(dirname "$LATEST_DIR")" "$(basename "$LATEST_DIR")"
-              
-              echo "📦 Created archive: $ARCHIVE_NAME"
-              echo "Size: $(du -h "$ARCHIVE_NAME" | cut -f1)"
-              
-              # Move to root
-              mv "$ARCHIVE_NAME" ./
-            else
-              echo "⚠️ No shorts directory found in output"
-            fi
-          else
-            echo "⚠️ No output directory found"
-          fi
-      
+          # List generated files
+          echo "📁 Generated files:"
+          find output/ -type f -name "*.mp4" -o -name "*.json" -o -name "*.md" | sort
+          
       - name: 📤 Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ai-director-output
+          name: ai-director-output-${{ github.run_id }}
           path: |
             output/
-            *.tar.gz
-            ai_director_pro.py
-          retention-days: 7
-          if-no-files-found: warn
-      
-      - name: 📊 Generate Summary
+            logs/
+            ai_director_output_*.zip
+          retention-days: 30
+          if-no-files-found: error
+          
+      - name: 📊 Upload Summary as Job Summary
         if: always()
         run: |
-          echo "# 🎬 AI Director Pro - Run Summary" > summary.md
-          echo "" >> summary.md
-          echo "## Run Information" >> summary.md
-          echo "- **Workflow**: ${{ github.workflow }}" >> summary.md
-          echo "- **Run ID**: ${{ github.run_id }}" >> summary.md
-          echo "- **Trigger**: ${{ github.event_name }}" >> summary.md
-          echo "- **Timestamp**: $(date)" >> summary.md
-          echo "" >> summary.md
-          
-          echo "## Configuration" >> summary.md
-          echo "- **AI Model**: GPT-4" >> summary.md
-          echo "- **Transcription Model**: Whisper Medium" >> summary.md
-          echo "- **Target Platform**: ${{ github.event.inputs.platform || 'tiktok' }}" >> summary.md
-          echo "- **Number of Shorts**: ${{ github.event.inputs.num_shorts || 5 }}" >> summary.md
-          echo "" >> summary.md
-          
-          # Count output files
-          if [ -d "output" ]; then
-            MP4_COUNT=$(find output -name "*.mp4" -type f | wc -l)
-            JSON_COUNT=$(find output -name "*.json" -type f | wc -l)
-            
-            echo "## Output Summary" >> summary.md
-            echo "- **Video Files (MP4)**: $MP4_COUNT" >> summary.md
-            echo "- **Metadata Files (JSON)**: $JSON_COUNT" >> summary.md
-            
-            # List directories
-            echo "" >> summary.md
-            echo "## Output Directories:" >> summary.md
-            for dir in output/*/; do
-              if [ -d "$dir" ]; then
-                DIR_NAME=$(basename "$dir")
-                FILES_IN_DIR=$(find "$dir" -type f | wc -l)
-                echo "- **$DIR_NAME**: $FILES_IN_DIR files" >> summary.md
-              fi
-            done
+          if [ -f output/SUMMARY.md ]; then
+            cat output/SUMMARY.md >> $GITHUB_STEP_SUMMARY
           else
-            echo "## Output Summary" >> summary.md
-            echo "No output generated" >> summary.md
+            echo "## 📊 AI Director Ultra" >> $GITHUB_STEP_SUMMARY
+            echo "No summary generated. Check logs for details." >> $GITHUB_STEP_SUMMARY
           fi
           
-          cat summary.md
+      - name: 🧹 Cleanup Workspace
+        if: always()
+        run: |
+          # Keep only essential files
+          rm -rf workspace/
+          rm -f ai_director_ultra.py
+          
+      - name: 🔔 Send Notification
+        if: always()
+        continue-on-error: true
+        run: |
+          echo "Workflow ${{ github.workflow }} completed with status: ${{ job.status }}"
+          echo "Run ID: ${{ github.run_id }}"
+          echo "Repository: ${{ github.repository }}"
