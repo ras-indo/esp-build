@@ -1,4 +1,4 @@
-name: 🎬 AI Director — Named Files & Deep Meta
+name: 🎬 AI Director (Anti-Fail & Auto-Retry)
 
 on:
   workflow_dispatch:
@@ -13,7 +13,7 @@ on:
         default: '5'
 
 jobs:
-  director-pipeline:
+  director-retry-pipeline:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Studio
@@ -37,7 +37,7 @@ jobs:
           python -m pip install -q langchain-core langchain-openai langchain-community
           python -m pip install -q git+https://github.com/openai/whisper.git
 
-      - name: Run Director Script
+      - name: Run Resilient Director Script
         run: |
           cat > ai_director.py << 'EOF'
           import os
@@ -46,6 +46,7 @@ jobs:
           import re
           import subprocess
           import gc
+          import time
           import torch
           import whisper
           from pathlib import Path
@@ -107,7 +108,7 @@ jobs:
                   print(f"❌ Audio Error: {e}")
                   sys.exit(1)
 
-          # === 4. THE AI DIRECTOR (ADVISOR + EDITOR) ===
+          # === 4. THE AI DIRECTOR (WITH AUTO-RETRY) ===
           def director_decision(segments):
               print("🧠 AI Director & Advisor are conferring...")
               
@@ -117,89 +118,92 @@ jobs:
 
               llm = ChatOpenAI(
                   model="gpt-4",
-                  temperature=0.2, # Sedikit kreativitas untuk caption, tapi strict untuk timestamp
+                  temperature=0.2, 
                   openai_api_key=API_KEY,
                   openai_api_base=API_BASE
               )
               
               parser = JsonOutputParser()
 
-              # PROMPT YANG SANGAT DETAIL
               template = """
-              Anda adalah TIM PRODUKSI VIDEO yang terdiri dari dua persona:
-              1. **THE ADVISOR (Penasihat Viral)**: Ahli algoritma TikTok/Reels yang mengerti psikologi penonton.
-              2. **THE EDITOR (Eksekutor)**: Editor presisi yang memotong video tanpa cacat.
-
-              TUGAS:
-              Analisis transkrip dan hasilkan {num_clips} klip video pendek terbaik.
-
-              INSTRUKSI PENASIHAT:
-              - Cari "Hook" (kalimat pembuka yang memancing rasa ingin tahu).
-              - Cari emosi (Marah, Tawa, Fakta Mengejutkan).
-              - Hindari bagian membosankan ("Halo guys", "Intro", "Loading").
+              Anda adalah TIM PRODUKSI VIDEO (ADVISOR + EDITOR).
               
-              INSTRUKSI EDITOR:
-              - Timestamp harus akurat.
-              - Judul harus Clickbait tapi relevan.
-              - Buat Caption Sosmed yang siap posting.
+              TUGAS: Analisis transkrip, cari {num_clips} momen viral terbaik.
 
-              OUTPUT WAJIB JSON (List of Objects):
+              INSTRUKSI:
+              1. Cari Hook Kuat & Emosi.
+              2. Hindari intro/outro channel.
+              3. Timestamp harus presisi (jangan potong kata).
+              4. Berikan judul clickbait & caption sosmed.
+
+              OUTPUT WAJIB JSON (List):
               [
                 {{
                   "start_time": 10.5,
                   "end_time": 40.0,
-                  "title": "Judul Viral (Tanpa Emoji)",
-                  "filename_suggestion": "Judul_Viral_Tanpa_Spasi",
-                  "viral_analysis": {{
-                      "hook_score": 95,
-                      "pacing": "Cepat",
-                      "emotion": "Lucu/Tegang/Informatif",
-                      "advisor_notes": "Alasan penasihat memilih bagian ini..."
-                  }},
-                  "social_media": {{
-                      "caption": "Caption menarik untuk diposting...",
-                      "hashtags": ["#fyp", "#viral", "#tag3"]
-                  }},
-                  "transcript_snippet": "Teks transkrip di bagian ini..."
+                  "title": "Judul Viral",
+                  "viral_analysis": {{ "hook": "...", "score": 90 }},
+                  "social_media": {{ "caption": "...", "hashtags": ["#fyp"] }}
                 }}
               ]
 
-              TRANSKRIP SUMBER:
+              TRANSKRIP:
               {transcript}
               """
 
               prompt = ChatPromptTemplate.from_template(template)
-              
-              # Batasi konteks
               msgs = prompt.format_messages(num_clips=NUM_CLIPS, transcript=full_text[:18000])
 
-              try:
-                  res = llm.invoke(msgs)
-                  print("✅ Keputusan Direksi Diterima.")
-                  data = parser.parse(res.content)
-                  
-                  if isinstance(data, dict): return [data]
-                  return data
-              except Exception as e:
-                  print(f"❌ Brain Failure: {e}")
-                  # Fallback basic parsing jika AI ngoceh
+              # === LOGIKA AUTO-RETRY (ANTI GAGAL 504) ===
+              MAX_RETRIES = 10
+              for attempt in range(1, MAX_RETRIES + 1):
                   try:
-                      content = res.content.replace("```json", "").replace("```", "").strip()
-                      return json.loads(content)
-                  except:
+                      print(f"🔄 Percobaan ke-{attempt} menghubungi AI Brain...")
+                      res = llm.invoke(msgs)
+                      
+                      # Cek validitas respon
+                      if not res.content:
+                          raise ValueError("Empty Response from AI")
+                          
+                      print("✅ Keputusan Direksi Diterima.")
+                      data = parser.parse(res.content)
+                      
+                      if isinstance(data, dict): return [data]
+                      if isinstance(data, list): return data
                       return []
+
+                  except Exception as e:
+                      error_msg = str(e)
+                      print(f"⚠️ Terjadi Kesalahan: {error_msg}")
+                      
+                      # Jika errornya 504 (Timeout), 502 (Bad Gateway), atau Connection Error
+                      if "504" in error_msg or "502" in error_msg or "Connection" in error_msg or "timeout" in error_msg.lower():
+                          wait_time = attempt * 1 # Exponential Backoff (1s, 6s, 9s...)
+                          print(f"⏳ Server sibuk (504/Timeout). Menunggu {wait_time} detik sebelum mencoba lagi...")
+                          time.sleep(wait_time)
+                      else:
+                          # Jika error kodingan/fatal, coba sekali lagi lalu break jika gagal terus
+                          if attempt == MAX_RETRIES:
+                              print("❌ Gagal total setelah percobaan maksimal.")
+                              sys.exit(1)
+                          print("⏳ Retrying generic error...")
+                          time.sleep(2)
+              
+              return []
 
           # === 5. EXPORT & NAMING ===
           def sanitize_name(name):
-              # Hanya izinkan huruf, angka, dan underscore
               clean = re.sub(r'[^a-zA-Z0-9]', '_', name)
-              # Hapus underscore berlebih
               clean = re.sub(r'_+', '_', clean)
               return clean.strip('_')
 
           def production(clips):
               print("✂️  Produksi Dimulai...")
               
+              if not clips:
+                  print("⚠️ Data klip kosong. Tidak ada yang diproduksi.")
+                  sys.exit(1)
+
               for clip in clips:
                   try:
                       s = float(clip["start_time"])
@@ -208,11 +212,8 @@ jobs:
                       
                       if dur < 5: continue
 
-                      # Naming Logic
                       raw_title = clip.get("title", "Untitled")
                       safe_name = sanitize_name(raw_title)
-                      
-                      # Jika kosong, fallback ke ID
                       if len(safe_name) < 3: safe_name = f"Viral_Clip_{int(s)}"
                       
                       vid_fname = f"{safe_name}.mp4"
@@ -221,7 +222,6 @@ jobs:
                       vid_path = OUTDIR / vid_fname
                       json_path = OUTDIR / json_fname
 
-                      # FFMPEG Cutting
                       cmd = [
                           "ffmpeg", "-y", "-ss", str(s), "-i", str(VIDEO_PATH),
                           "-t", str(dur), "-c:v", "libx264", "-preset", "fast",
@@ -229,20 +229,17 @@ jobs:
                       ]
                       subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                       
-                      # Writing Detailed Metadata
                       meta_content = {
                           "file_info": {
                               "filename": vid_fname,
-                              "duration_sec": round(dur, 2),
-                              "source_time": f"{s}-{e}"
+                              "duration_sec": round(dur, 2)
                           },
                           "content_strategy": {
                               "title": clip.get("title"),
-                              "advisor_analysis": clip.get("viral_analysis"),
-                              "transcript": clip.get("transcript_snippet")
+                              "analysis": clip.get("viral_analysis"),
                           },
                           "social_ready": clip.get("social_media"),
-                          "ai_engine": "Director Mode (GPT-4 + Whisper Medium)"
+                          "ai_engine": "Director Mode (Auto-Retry)"
                       }
 
                       with open(json_path, "w", encoding="utf-8") as f:
@@ -258,11 +255,9 @@ jobs:
               segs = listen_to_video()
               if not segs: sys.exit(1)
               
+              # Loop retry sudah ada di dalam fungsi ini
               decisions = director_decision(segs)
-              if not decisions: 
-                  print("❌ AI Director tidak menemukan momen viral.")
-                  sys.exit(1)
-                  
+              
               production(decisions)
               print("✅ SEMUA SELESAI.")
           EOF
