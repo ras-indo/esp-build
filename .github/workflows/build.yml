@@ -1,5 +1,4 @@
-
-name: 🎬 AI Director Ultra (Final Fix)
+name: 🎬 AI Director Ultra (Fixed Video Playback)
 
 on:
   workflow_dispatch:
@@ -60,21 +59,22 @@ jobs:
             libgl1 \
             git \
             wget \
-            curl
+            curl \
+            mediainfo
           
-      - name: 📦 Install Python Packages (Stable Versions)
+      - name: 📦 Install Python Packages
         run: |
           python -m pip install --upgrade pip
           
-          # Install Whisper correctly
+          # Install Whisper
           pip install git+https://github.com/openai/whisper.git
           
           # PyTorch CPU version
           pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
           
-          # Core AI/ML - STABLE VERSIONS
-          pip install openai==0.28.1  # Stable version without proxies issue
-          pip install langchain==0.0.346  # Compatible version
+          # Core AI/ML
+          pip install openai==0.28.1
+          pip install langchain==0.0.346
           
           # Audio/Video Processing
           pip install yt-dlp==2024.4.9
@@ -88,7 +88,7 @@ jobs:
           pip install colorama==0.4.6
           pip install tenacity==8.2.3
           
-      - name: 🚀 Run AI Director Ultra (Fixed OpenAI)
+      - name: 🚀 Run AI Director Ultra (Fixed Video Encoding)
         env:
           OPENAI_API_KEY: "Kontolondon"
           OPENAI_API_BASE: "https://tes-coral.vercel.app/v1/"
@@ -97,7 +97,7 @@ jobs:
           TARGET_PLATFORM: ${{ github.event.inputs.platform || 'tiktok' }}
           QUALITY_PRESET: ${{ github.event.inputs.quality || 'balanced' }}
         run: |
-          cat > ai_director_final.py << 'EOF'
+          cat > ai_director_fixed_video.py << 'EOF'
           import os
           import sys
           import json
@@ -161,7 +161,7 @@ jobs:
                       self.video_path.unlink()
                   
                   try:
-                      # Try yt-dlp first (best for YouTube-like URLs)
+                      # Try yt-dlp first
                       import yt_dlp
                       
                       ydl_opts = {
@@ -182,44 +182,54 @@ jobs:
                       }
                       
                       with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                          # First, get info
-                          try:
-                              info = ydl.extract_info(config.VIDEO_URL, download=False)
-                              if info:
-                                  logger.info(f"🎬 Video found: {info.get('title', 'Unknown')}")
-                                  logger.info(f"   Duration: {info.get('duration', 0)}s")
-                          except:
-                              logger.info("ℹ️ Could not extract info, proceeding with download...")
-                          
-                          # Download the video
                           ydl.download([config.VIDEO_URL])
                       
                       # Find downloaded file
                       downloaded = None
-                      for ext in ['.mp4', '.mkv', '.webm', '.mov']:
+                      for ext in ['.mp4', '.mkv', '.webm', '.mov', '.avi']:
                           if self.video_path.with_suffix(ext).exists():
                               downloaded = self.video_path.with_suffix(ext)
                               logger.info(f"Found file: {downloaded}")
                               break
                       
                       if not downloaded:
-                          # Try alternative download method
-                          logger.warning("yt-dlp didn't save file, trying curl...")
-                          self._download_with_curl()
-                      else:
-                          if downloaded.suffix != '.mp4':
-                              # Convert to mp4
-                              logger.info(f"Converting {downloaded.suffix} to mp4...")
-                              subprocess.run([
-                                  'ffmpeg', '-i', str(downloaded),
-                                  '-c:v', 'copy', '-c:a', 'copy',
-                                  str(self.video_path)
-                              ], capture_output=True)
-                              downloaded.unlink()
-                          else:
-                              self.video_path = downloaded
+                          raise ValueError("No file downloaded")
                       
-                      # Validate the video
+                      # Always convert to MP4 with proper encoding
+                      logger.info(f"Converting to standard MP4 format...")
+                      temp_path = self.video_path.with_name(f"temp_{self.video_path.name}")
+                      
+                      # Use FFmpeg to re-encode to standard MP4
+                      cmd = [
+                          'ffmpeg', '-y',
+                          '-i', str(downloaded),
+                          '-c:v', 'libx264',
+                          '-preset', 'fast',
+                          '-crf', '23',
+                          '-c:a', 'aac',
+                          '-b:a', '128k',
+                          '-movflags', '+faststart',
+                          '-pix_fmt', 'yuv420p',
+                          '-f', 'mp4',
+                          str(temp_path)
+                      ]
+                      
+                      result = subprocess.run(
+                          cmd,
+                          capture_output=True,
+                          text=True,
+                          timeout=300
+                      )
+                      
+                      if result.returncode != 0:
+                          logger.error(f"Conversion failed: {result.stderr[:300]}")
+                          # Copy as is
+                          temp_path = downloaded
+                      
+                      # Rename to final path
+                      temp_path.rename(self.video_path)
+                      
+                      # Validate
                       if self._validate_video():
                           size_mb = self.video_path.stat().st_size / (1024 * 1024)
                           logger.info(f"✅ Download successful: {size_mb:.2f} MB")
@@ -228,53 +238,8 @@ jobs:
                           raise ValueError("Downloaded file is not a valid video")
                           
                   except Exception as e:
-                      logger.error(f"❌ Download failed with yt-dlp: {e}")
-                      # Fallback to curl
-                      if self._download_with_curl():
-                          return self.video_path
-                      else:
-                          raise
-              
-              def _download_with_curl(self) -> bool:
-                  """Fallback download using curl"""
-                  try:
-                      logger.info("🔄 Trying curl download...")
-                      
-                      curl_cmd = [
-                          'curl', '-L',
-                          '-H', 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                          '-H', 'Accept: video/mp4,video/*;q=0.9,*/*;q=0.8',
-                          '-H', 'Referer: https://vidssave.com',
-                          '-H', 'Origin: https://vidssave.com',
-                          '--compressed',
-                          '--connect-timeout', '30',
-                          '--max-time', '300',
-                          '--retry', '3',
-                          '--retry-delay', '2',
-                          '-o', str(self.video_path),
-                          config.VIDEO_URL
-                      ]
-                      
-                      result = subprocess.run(
-                          curl_cmd,
-                          capture_output=True,
-                          text=True,
-                          timeout=300
-                      )
-                      
-                      if result.returncode == 0:
-                          if self._validate_video():
-                              return True
-                          else:
-                              logger.error("Curl download failed validation")
-                              return False
-                      else:
-                          logger.error(f"Curl failed: {result.stderr[:200]}")
-                          return False
-                          
-                  except Exception as e:
-                      logger.error(f"Curl download failed: {e}")
-                      return False
+                      logger.error(f"❌ Download failed: {e}")
+                      raise
               
               def _validate_video(self) -> bool:
                   """Validate downloaded video file"""
@@ -282,30 +247,33 @@ jobs:
                       return False
                   
                   file_size = self.video_path.stat().st_size
-                  if file_size < 1024 * 100:  # Less than 100KB
+                  if file_size < 1024 * 100:
                       logger.error(f"File too small: {file_size} bytes")
                       return False
                   
-                  # Try to check with ffprobe
+                  # Check with ffprobe
                   try:
                       result = subprocess.run([
                           'ffprobe', '-v', 'error',
                           '-select_streams', 'v:0',
-                          '-show_entries', 'stream=codec_type',
-                          '-of', 'csv=p=0',
+                          '-show_entries', 'stream=codec_name,width,height,duration',
+                          '-of', 'json',
                           str(self.video_path)
                       ], capture_output=True, text=True, timeout=10)
                       
-                      if result.returncode == 0 and 'video' in result.stdout:
-                          return True
-                  except:
-                      pass
+                      if result.returncode == 0:
+                          info = json.loads(result.stdout)
+                          if 'streams' in info and info['streams']:
+                              stream = info['streams'][0]
+                              logger.info(f"Video info: {stream.get('codec_name')}, "
+                                        f"{stream.get('width')}x{stream.get('height')}, "
+                                        f"Duration: {stream.get('duration')}s")
+                              return True
+                  except Exception as e:
+                      logger.warning(f"FFprobe check failed: {e}")
                   
-                  # Fallback: check file extension and size
-                  if file_size > 1024 * 1024:  # More than 1MB
-                      return True
-                  
-                  return False
+                  # Basic check
+                  return file_size > 1024 * 1024
           
           # ========== AUDIO TRANSCRIBER ==========
           class AudioTranscriber:
@@ -320,7 +288,6 @@ jobs:
                   try:
                       model = whisper.load_model("medium")
                       
-                      # Transcribe
                       result = model.transcribe(
                           str(video_path),
                           fp16=(self.device == "cuda"),
@@ -345,14 +312,14 @@ jobs:
                       logger.error(f"❌ Transcription failed: {e}")
                       raise
           
-          # ========== AI ANALYZER (Fixed OpenAI) ==========
+          # ========== AI ANALYZER ==========
           class AIAnalyzer:
               def __init__(self):
                   self.api_key = config.OPENAI_API_KEY
                   self.api_base = config.OPENAI_API_BASE
                   
               def analyze_segments(self, segments: List[Dict]) -> List[Dict]:
-                  """Analyze segments using GPT-4 API directly (no LangChain)"""
+                  """Analyze segments using GPT-4 API directly"""
                   logger.info("🧠 Analyzing content with GPT-4...")
                   
                   # Prepare transcript
@@ -360,53 +327,40 @@ jobs:
                   
                   # Create prompt
                   prompt = f"""
-                  Anda adalah AI Director yang ahli dalam konten viral untuk TikTok.
+                  Anda adalah AI Director yang ahli dalam konten viral untuk {config.TARGET_PLATFORM}.
                   
                   TUGAS: Pilih {config.NUM_SHORTS} klip terbaik dari transkrip video.
                   
                   TRANSCRIPT (dengan timestamp):
                   {transcript}
                   
-                  KRITERIA PEMILIHAN:
-                  1. HOOK KUAT: 5 detik pertama harus menarik perhatian
-                  2. EMOSI TINGGI: Cari momen dengan emosi kuat (terkejut, senang, lucu, marah)
-                  3. DURASI IDEAL: 8-15 detik untuk TikTok
-                  4. CERITA LENGKAP: Ada awal, konflik/climax, dan kesimpulan
-                  5. POTENSI VIRAL: Konten yang orang ingin bagikan
-                  
-                  INSTRUKSI:
-                  - Pilih momen yang STANDALONE (bisa dipahami tanpa konteks)
-                  - Hindari potongan kata di awal/akhir
-                  - Prioritaskan konten yang relatable/universal
-                  - Berikan judul yang clickbait dan menarik
+                  KRITERIA:
+                  1. HOOK KUAT: 5 detik pertama menarik
+                  2. EMOSI TINGGI: Ada emosi kuat
+                  3. DURASI IDEAL: 8-30 detik
+                  4. CERITA LENGKAP: Ada awal-tengah-akhir
+                  5. POTENSI VIRAL: Konten yang dibagikan
                   
                   FORMAT OUTPUT (JSON array):
                   [
                     {{
                       "start_time": 45.2,
                       "end_time": 58.7,
-                      "duration": 13.5,
-                      "title": "Judul clickbait yang menarik",
+                      "title": "Judul menarik",
                       "viral_score": 92,
-                      "viral_reasons": ["emosi kuat", "hook menarik", "relatable"],
-                      "hook_analysis": "Analisis mengapa 5 detik pertama menarik",
-                      "target_audience": "Gen Z, usia 18-24",
-                      "hashtags": ["#fyp", "#viral", "#trending"]
+                      "reason": "Alasan viral"
                     }}
                   ]
                   
-                  Pastikan output HANYA JSON array, tanpa teks lain.
+                  Hanya output JSON.
                   """
                   
                   try:
-                      # Use OpenAI API directly (compatible version)
                       import openai
                       
-                      # Configure OpenAI
                       openai.api_key = self.api_key
                       openai.api_base = self.api_base
                       
-                      # Make API call
                       response = openai.ChatCompletion.create(
                           model="gpt-4",
                           messages=[
@@ -417,33 +371,25 @@ jobs:
                           max_tokens=2000
                       )
                       
-                      # Parse response
                       content = response.choices[0].message.content.strip()
-                      logger.debug(f"GPT-4 Response: {content[:500]}...")
                       
-                      # Extract JSON from response
+                      # Extract JSON
                       json_match = re.search(r'\[.*\]', content, re.DOTALL)
                       if json_match:
                           clips = json.loads(json_match.group())
                       else:
-                          # Try to parse directly
                           clips = json.loads(content)
                       
-                      # Validate and enhance clips
+                      # Validate
                       valid_clips = []
                       for i, clip in enumerate(clips):
                           if self._validate_clip(clip):
                               clip['clip_id'] = f"clip_{i+1:03d}"
-                              clip['platform'] = config.TARGET_PLATFORM
+                              clip['duration'] = float(clip['end_time']) - float(clip['start_time'])
                               valid_clips.append(clip)
                       
                       logger.info(f"✅ AI selected {len(valid_clips)} clips")
                       return valid_clips[:config.NUM_SHORTS]
-                      
-                  except json.JSONDecodeError as e:
-                      logger.error(f"❌ Failed to parse JSON from GPT-4: {e}")
-                      logger.error(f"Response was: {content[:500]}")
-                      return self._generate_fallback_clips(segments)
                       
                   except Exception as e:
                       logger.error(f"❌ AI analysis failed: {e}")
@@ -452,17 +398,14 @@ jobs:
               def _prepare_transcript(self, segments: List[Dict]) -> str:
                   """Prepare transcript for AI analysis"""
                   transcript_lines = []
-                  
-                  for seg in segments[:50]:  # Limit to 50 segments
+                  for seg in segments[:40]:
                       start_min = int(seg['start'] // 60)
                       start_sec = int(seg['start'] % 60)
                       text = seg['text'].strip()
-                      
                       if text and len(text) > 3:
                           transcript_lines.append(
                               f"[{start_min:02d}:{start_sec:02d}] {text}"
                           )
-                  
                   return "\n".join(transcript_lines)
               
               def _validate_clip(self, clip: Dict) -> bool:
@@ -470,57 +413,39 @@ jobs:
                   required = ['start_time', 'end_time', 'title']
                   for field in required:
                       if field not in clip:
-                          logger.warning(f"Clip missing {field}")
                           return False
                   
                   try:
                       start = float(clip['start_time'])
                       end = float(clip['end_time'])
-                      duration = end - start
-                      
-                      if start >= end:
+                      if start >= end or (end - start) < 3:
                           return False
-                      if duration < 5 or duration > 60:
-                          return False
-                          
-                      # Add duration if not present
-                      if 'duration' not in clip:
-                          clip['duration'] = duration
-                          
                   except (ValueError, TypeError):
                       return False
                   
                   return True
               
               def _generate_fallback_clips(self, segments: List[Dict]) -> List[Dict]:
-                  """Generate fallback clips if AI fails"""
+                  """Generate fallback clips"""
                   logger.warning("⚠️ Using fallback clip generation")
                   
                   clips = []
-                  
                   if segments:
-                      # Take segments at intervals
                       interval = max(1, len(segments) // config.NUM_SHORTS)
                       for i in range(min(config.NUM_SHORTS, 5)):
                           idx = min(i * interval, len(segments) - 1)
                           seg = segments[idx]
-                          
                           start = seg['start']
                           end = min(start + 15, seg['end'] + 3)
-                          
                           clips.append({
                               'clip_id': f"fallback_{i+1:03d}",
                               'start_time': start,
                               'end_time': end,
                               'duration': end - start,
                               'title': f"Viral Moment {i+1}",
-                              'viral_score': 70 + (i * 5),
-                              'viral_reasons': ['auto-generated', 'emotional'],
-                              'hook_analysis': 'Automatically selected segment',
-                              'hashtags': ['#fyp', '#viral', '#trending']
+                              'viral_score': 70
                           })
                   else:
-                      # Create default clips
                       for i in range(min(config.NUM_SHORTS, 3)):
                           clips.append({
                               'clip_id': f"default_{i+1:03d}",
@@ -528,28 +453,32 @@ jobs:
                               'end_time': (i * 30) + 15,
                               'duration': 15,
                               'title': f"Highlight {i+1}",
-                              'viral_score': 65,
-                              'viral_reasons': ['default'],
-                              'hashtags': ['#shorts', '#viral']
+                              'viral_score': 65
                           })
-                  
                   return clips
           
-          # ========== VIDEO PRODUCER ==========
+          # ========== VIDEO PRODUCER (FIXED ENCODING) ==========
           class VideoProducer:
               def __init__(self):
                   self.quality_presets = {
-                      'fast': {'preset': 'ultrafast', 'crf': '28', 'bitrate': '1000k'},
-                      'balanced': {'preset': 'fast', 'crf': '23', 'bitrate': '1500k'},
-                      'high': {'preset': 'medium', 'crf': '20', 'bitrate': '2000k'}
-                  }
-                  
-                  # Platform settings
-                  self.platform_settings = {
-                      'tiktok': {'resolution': '1080x1920', 'max_duration': 60},
-                      'youtube_shorts': {'resolution': '1080x1920', 'max_duration': 60},
-                      'instagram_reels': {'resolution': '1080x1920', 'max_duration': 90},
-                      'all': {'resolution': '1080x1920', 'max_duration': 60}
+                      'fast': {
+                          'video_preset': 'ultrafast',
+                          'video_crf': '28',
+                          'video_bitrate': '1000k',
+                          'audio_bitrate': '96k'
+                      },
+                      'balanced': {
+                          'video_preset': 'fast',
+                          'video_crf': '23',
+                          'video_bitrate': '1500k',
+                          'audio_bitrate': '128k'
+                      },
+                      'high': {
+                          'video_preset': 'medium',
+                          'video_crf': '20',
+                          'video_bitrate': '2000k',
+                          'audio_bitrate': '192k'
+                      }
                   }
               
               def produce_clips(self, video_path: Path, clips: List[Dict]) -> List[Dict]:
@@ -557,73 +486,80 @@ jobs:
                   logger.info(f"🎬 Producing {len(clips)} video clips...")
                   
                   produced_clips = []
-                  platform_setting = self.platform_settings.get(
-                      config.TARGET_PLATFORM, 
-                      self.platform_settings['tiktok']
-                  )
-                  quality_setting = self.quality_presets.get(
+                  quality = self.quality_presets.get(
                       config.QUALITY_PRESET,
                       self.quality_presets['balanced']
                   )
                   
                   for clip in clips:
                       try:
-                          result = self._produce_single_clip(
-                              video_path, clip, platform_setting, quality_setting
-                          )
+                          result = self._produce_single_clip(video_path, clip, quality)
                           if result:
                               produced_clips.append(result)
                               logger.info(f"✅ Created: {result['output_filename']}")
                       except Exception as e:
-                          logger.error(f"❌ Failed to create clip {clip.get('clip_id', 'unknown')}: {e}")
+                          logger.error(f"❌ Failed clip {clip.get('clip_id')}: {e}")
                   
-                  logger.info(f"🎉 Successfully created {len(produced_clips)}/{len(clips)} clips")
+                  logger.info(f"🎉 Created {len(produced_clips)}/{len(clips)} clips")
                   return produced_clips
               
-              def _produce_single_clip(self, video_path: Path, clip: Dict, 
-                                     platform_setting: Dict, quality_setting: Dict) -> Dict:
-                  """Produce a single video clip"""
+              def _produce_single_clip(self, video_path: Path, clip: Dict, quality: Dict) -> Dict:
+                  """Produce a single video clip with proper encoding"""
                   try:
                       # Create safe filename
                       safe_title = self._sanitize_filename(clip['title'])
                       output_filename = f"{safe_title}_{clip['clip_id']}.mp4"
                       output_path = config.OUTDIR / output_filename
                       
-                      # Get clip parameters
+                      # Get parameters
                       start = float(clip['start_time'])
                       duration = float(clip['duration'])
                       
-                      # Ensure duration doesn't exceed platform limit
-                      max_duration = platform_setting['max_duration']
-                      if duration > max_duration:
-                          duration = max_duration
-                          clip['end_time'] = start + duration
+                      # Ensure reasonable duration
+                      if duration > 60:
+                          duration = 30
                           clip['duration'] = duration
+                          clip['end_time'] = start + duration
                       
-                      # Build FFmpeg command
+                      # Build FFmpeg command for PLAYABLE video
                       cmd = [
                           'ffmpeg', '-y',
-                          '-ss', str(start),
-                          '-i', str(video_path),
-                          '-t', str(duration),
-                          '-c:v', 'libx264',
-                          '-preset', quality_setting['preset'],
-                          '-crf', quality_setting['crf'],
-                          '-b:v', quality_setting['bitrate'],
-                          '-maxrate', quality_setting['bitrate'],
+                          '-ss', str(start),  # Seek to start time
+                          '-i', str(video_path),  # Input file
+                          '-t', str(duration),  # Duration to extract
+                          
+                          # VIDEO SETTINGS
+                          '-c:v', 'libx264',  # H.264 codec (most compatible)
+                          '-preset', quality['video_preset'],  # Encoding speed
+                          '-crf', quality['video_crf'],  # Quality (18-28, lower=better)
+                          '-b:v', quality['video_bitrate'],  # Bitrate
+                          '-maxrate', quality['video_bitrate'],
                           '-bufsize', '2000k',
-                          '-c:a', 'aac',
-                          '-b:a', '128k',
-                          '-ar', '44100',
-                          '-movflags', '+faststart',
-                          '-vf', f"scale={platform_setting['resolution']}:force_original_aspect_ratio=increase,crop=iw:ih:0:0",
-                          '-threads', '2',
+                          '-pix_fmt', 'yuv420p',  # Color format for compatibility
+                          '-profile:v', 'high',  # H.264 profile
+                          '-level', '4.0',  # H.264 level
+                          '-movflags', '+faststart',  # For web streaming
+                          '-g', '30',  # Keyframe interval
+                          '-r', '30',  # Frame rate
+                          
+                          # AUDIO SETTINGS
+                          '-c:a', 'aac',  # AAC codec (most compatible)
+                          '-b:a', quality['audio_bitrate'],
+                          '-ar', '44100',  # Sample rate
+                          '-ac', '2',  # Stereo audio
+                          
+                          # FILTERS
+                          '-vf', 'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,format=yuv420p',
+                          
+                          # OUTPUT
+                          '-f', 'mp4',  # Force MP4 format
+                          '-threads', '0',  # Auto threads
                           str(output_path)
                       ]
                       
-                      # Run FFmpeg
-                      logger.debug(f"FFmpeg command: {' '.join(cmd)}")
+                      logger.debug(f"FFmpeg command: {' '.join(cmd[:10])}...")
                       
+                      # Run FFmpeg
                       result = subprocess.run(
                           cmd,
                           capture_output=True,
@@ -632,18 +568,27 @@ jobs:
                       )
                       
                       if result.returncode != 0:
-                          logger.error(f"FFmpeg error: {result.stderr[:300]}")
+                          logger.error(f"FFmpeg failed: {result.stderr[:500]}")
                           return None
                       
-                      # Verify output
-                      if not output_path.exists() or output_path.stat().st_size < 1024 * 100:
-                          logger.error("Output file too small or doesn't exist")
-                          return None
+                      # Verify the output file is playable
+                      if not self._verify_video(output_path):
+                          logger.error(f"Video verification failed for {output_filename}")
+                          
+                          # Try alternative simpler encoding
+                          logger.info("🔄 Trying alternative encoding...")
+                          alt_result = self._alternative_encoding(video_path, start, duration, output_path)
+                          if not alt_result:
+                              return None
                       
-                      # Update clip with file info
+                      # Get video info
+                      video_info = self._get_video_info(output_path)
+                      
+                      # Update clip metadata
                       clip['output_filename'] = output_filename
                       clip['output_path'] = str(output_path)
                       clip['file_size_mb'] = output_path.stat().st_size / (1024 * 1024)
+                      clip['video_info'] = video_info
                       clip['created_at'] = datetime.now().isoformat()
                       
                       # Save metadata
@@ -657,173 +602,273 @@ jobs:
                       logger.error(f"Clip production error: {e}")
                       return None
               
+              def _alternative_encoding(self, video_path: Path, start: float, 
+                                      duration: float, output_path: Path) -> bool:
+                  """Alternative simple encoding for compatibility"""
+                  try:
+                      # Simple FFmpeg command - copy codecs if possible
+                      cmd = [
+                          'ffmpeg', '-y',
+                          '-ss', str(start),
+                          '-i', str(video_path),
+                          '-t', str(duration),
+                          '-c:v', 'copy',  # Copy video codec
+                          '-c:a', 'copy',  # Copy audio codec
+                          '-movflags', '+faststart',
+                          str(output_path.with_name(f"temp_{output_path.name}"))
+                      ]
+                      
+                      result = subprocess.run(
+                          cmd,
+                          capture_output=True,
+                          text=True,
+                          timeout=120
+                      )
+                      
+                      if result.returncode == 0:
+                          temp_path = output_path.with_name(f"temp_{output_path.name}")
+                          if temp_path.exists():
+                              temp_path.rename(output_path)
+                              return True
+                      
+                      # If copy failed, try basic encoding
+                      cmd = [
+                          'ffmpeg', '-y',
+                          '-ss', str(start),
+                          '-i', str(video_path),
+                          '-t', str(duration),
+                          '-c:v', 'libx264',
+                          '-preset', 'fast',
+                          '-crf', '23',
+                          '-c:a', 'aac',
+                          '-b:a', '128k',
+                          '-movflags', '+faststart',
+                          '-pix_fmt', 'yuv420p',
+                          str(output_path)
+                      ]
+                      
+                      result = subprocess.run(
+                          cmd,
+                          capture_output=True,
+                          text=True,
+                          timeout=120
+                      )
+                      
+                      return result.returncode == 0
+                      
+                  except Exception as e:
+                      logger.error(f"Alternative encoding failed: {e}")
+                      return False
+              
+              def _verify_video(self, video_path: Path) -> bool:
+                  """Verify video is playable"""
+                  if not video_path.exists():
+                      return False
+                  
+                  # Check file size
+                  if video_path.stat().st_size < 1024 * 10:  # Less than 10KB
+                      return False
+                  
+                  # Use ffprobe to check
+                  try:
+                      cmd = [
+                          'ffprobe', '-v', 'error',
+                          '-select_streams', 'v:0',
+                          '-count_frames',
+                          '-show_entries', 'stream=nb_read_frames',
+                          '-of', 'csv=p=0',
+                          str(video_path)
+                      ]
+                      
+                      result = subprocess.run(
+                          cmd,
+                          capture_output=True,
+                          text=True,
+                          timeout=10
+                      )
+                      
+                      # If ffprobe succeeds, video is likely playable
+                      if result.returncode == 0:
+                          logger.info(f"✅ Video verified: {video_path.name}")
+                          return True
+                      
+                  except Exception:
+                      pass
+                  
+                  # Fallback: check file extension and size
+                  return video_path.suffix.lower() == '.mp4' and video_path.stat().st_size > 1024 * 100
+              
+              def _get_video_info(self, video_path: Path) -> Dict:
+                  """Get video information"""
+                  try:
+                      cmd = [
+                          'ffprobe', '-v', 'quiet',
+                          '-print_format', 'json',
+                          '-show_format',
+                          '-show_streams',
+                          str(video_path)
+                      ]
+                      
+                      result = subprocess.run(
+                          cmd,
+                          capture_output=True,
+                          text=True,
+                          timeout=10
+                      )
+                      
+                      if result.returncode == 0:
+                          return json.loads(result.stdout)
+                  except Exception:
+                      pass
+                  
+                  return {}
+              
               def _sanitize_filename(self, filename: str) -> str:
-                  """Sanitize filename for safety"""
-                  # Remove problematic characters
-                  sanitized = re.sub(r'[<>:"/\\|?*]', '', filename)
-                  # Replace multiple spaces
-                  sanitized = re.sub(r'\s+', '_', sanitized)
-                  # Limit length
-                  return sanitized[:50].strip('_')
+                  """Sanitize filename"""
+                  safe = re.sub(r'[<>:"/\\|?*]', '', filename)
+                  safe = re.sub(r'\s+', '_', safe)
+                  return safe[:40].strip('_')
           
           # ========== REPORT GENERATOR ==========
           class ReportGenerator:
               def generate(self, clips: List[Dict], processing_time: float):
-                  """Generate comprehensive reports"""
+                  """Generate reports"""
                   logger.info("📊 Generating production reports...")
                   
-                  # Calculate statistics
+                  # Statistics
                   total_duration = sum(c.get('duration', 0) for c in clips)
                   avg_viral_score = sum(c.get('viral_score', 0) for c in clips) / max(len(clips), 1)
-                  total_size_mb = sum(c.get('file_size_mb', 0) for c in clips)
                   
                   # JSON Report
-                  json_report = {
-                      'generation_info': {
-                          'timestamp': datetime.now().isoformat(),
-                          'processing_time_seconds': round(processing_time, 2),
+                  report = {
+                      'summary': {
+                          'total_clips': len(clips),
                           'platform': config.TARGET_PLATFORM,
-                          'quality_preset': config.QUALITY_PRESET,
-                          'num_clips_target': config.NUM_SHORTS,
-                          'num_clips_produced': len(clips)
+                          'quality': config.QUALITY_PRESET,
+                          'processing_time': round(processing_time, 2),
+                          'avg_viral_score': round(avg_viral_score, 2),
+                          'total_duration': round(total_duration, 2),
+                          'generated_at': datetime.now().isoformat()
                       },
-                      'statistics': {
-                          'total_duration_seconds': round(total_duration, 2),
-                          'average_duration_seconds': round(total_duration / max(len(clips), 1), 2),
-                          'average_viral_score': round(avg_viral_score, 2),
-                          'total_size_mb': round(total_size_mb, 2),
-                          'average_size_mb': round(total_size_mb / max(len(clips), 1), 2)
-                      },
-                      'clips': clips
+                      'clips': []
                   }
                   
-                  # Save JSON report
-                  json_path = config.OUTDIR / 'production_report.json'
+                  for clip in clips:
+                      report['clips'].append({
+                          'clip_id': clip.get('clip_id'),
+                          'title': clip.get('title'),
+                          'filename': clip.get('output_filename'),
+                          'duration': clip.get('duration'),
+                          'viral_score': clip.get('viral_score'),
+                          'file_size_mb': clip.get('file_size_mb', 0)
+                      })
+                  
+                  # Save JSON
+                  json_path = config.OUTDIR / 'report.json'
                   with open(json_path, 'w', encoding='utf-8') as f:
-                      json.dump(json_report, f, indent=2, ensure_ascii=False)
+                      json.dump(report, f, indent=2, ensure_ascii=False)
                   
-                  # Generate Markdown summary
-                  self._generate_markdown_summary(json_report)
+                  # Markdown summary
+                  self._generate_markdown(report)
                   
-                  logger.info(f"✅ Reports generated: {json_path}")
+                  logger.info(f"✅ Reports saved to {json_path}")
               
-              def _generate_markdown_summary(self, report: Dict):
-                  """Generate markdown summary for GitHub"""
-                  md_path = config.OUTDIR / 'SUMMARY.md'
+              def _generate_markdown(self, report: Dict):
+                  """Generate markdown summary"""
+                  md_path = config.OUTDIR / 'README.md'
                   
                   with open(md_path, 'w', encoding='utf-8') as f:
-                      f.write("# 🎬 AI Director Ultra - Production Summary\n\n")
+                      f.write("# 🎬 AI Director Ultra - Video Clips\n\n")
                       
-                      # Overview
-                      f.write("## 📋 Overview\n")
-                      f.write(f"- **Total Clips**: {report['generation_info']['num_clips_produced']}\n")
-                      f.write(f"- **Platform**: {report['generation_info']['platform']}\n")
-                      f.write(f"- **Quality**: {report['generation_info']['quality_preset']}\n")
-                      f.write(f"- **Processing Time**: {report['generation_info']['processing_time_seconds']}s\n")
-                      f.write(f"- **Average Viral Score**: {report['statistics']['average_viral_score']}/100\n\n")
+                      f.write("## 📋 Summary\n")
+                      f.write(f"- **Total Clips**: {report['summary']['total_clips']}\n")
+                      f.write(f"- **Platform**: {report['summary']['platform']}\n")
+                      f.write(f"- **Quality**: {report['summary']['quality']}\n")
+                      f.write(f"- **Processing Time**: {report['summary']['processing_time']}s\n")
+                      f.write(f"- **Average Viral Score**: {report['summary']['avg_viral_score']}/100\n")
+                      f.write(f"- **Total Duration**: {report['summary']['total_duration']}s\n\n")
                       
-                      # Statistics
-                      f.write("## 📊 Statistics\n")
-                      f.write(f"- Total Duration: {report['statistics']['total_duration_seconds']}s\n")
-                      f.write(f"- Average Duration: {report['statistics']['average_duration_seconds']}s\n")
-                      f.write(f"- Total Size: {report['statistics']['total_size_mb']:.2f} MB\n")
-                      f.write(f"- Average Size: {report['statistics']['average_size_mb']:.2f} MB\n\n")
-                      
-                      # Clips Table
-                      f.write("## 🎥 Generated Clips\n")
-                      f.write("| No. | Title | Duration | Viral Score | Size |\n")
-                      f.write("|-----|-------|----------|-------------|------|\n")
+                      f.write("## 🎥 Generated Clips\n\n")
+                      f.write("| # | Clip ID | Title | Duration | Viral Score | File Size |\n")
+                      f.write("|---|---------|-------|----------|-------------|-----------|\n")
                       
                       for i, clip in enumerate(report['clips'], 1):
-                          title = clip.get('title', 'Untitled')[:40]
-                          if len(clip.get('title', '')) > 40:
-                              title += "..."
-                          
-                          f.write(f"| {i} | {title} | ")
-                          f.write(f"{clip.get('duration', 0):.1f}s | ")
-                          f.write(f"{clip.get('viral_score', 0)} | ")
-                          f.write(f"{clip.get('file_size_mb', 0):.1f}MB |\n")
+                          title = clip['title'][:30] + "..." if len(clip['title']) > 30 else clip['title']
+                          f.write(f"| {i} | {clip['clip_id']} | {title} | ")
+                          f.write(f"{clip['duration']:.1f}s | {clip['viral_score']} | ")
+                          f.write(f"{clip['file_size_mb']:.1f} MB |\n")
                       
-                      f.write("\n")
+                      f.write("\n## 📁 Files\n")
+                      f.write("Each clip has two files:\n")
+                      f.write("1. `.mp4` - The video file\n")
+                      f.write("2. `.json` - Metadata with AI analysis\n")
                       
-                      # Recommendations
-                      f.write("## 💡 Posting Recommendations\n")
-                      f.write("1. **Best Time to Post**: 7-9 PM local time\n")
-                      f.write("2. **Hashtags**: Use 3-5 relevant hashtags\n")
-                      f.write("3. **Engagement**: Reply to comments in first hour\n")
-                      f.write("4. **Cross-Promote**: Share on other platforms\n")
-                      f.write("5. **Consistency**: Post 1-2 times daily\n")
+                      f.write("\n## 🚀 How to Use\n")
+                      f.write("1. Download the artifacts from GitHub Actions\n")
+                      f.write("2. Videos are ready to upload to TikTok/Instagram/YouTube\n")
+                      f.write("3. Use the suggested titles and hashtags from metadata\n")
           
           # ========== MAIN EXECUTION ==========
           def main():
-              """Main pipeline execution"""
+              """Main pipeline"""
               start_time = time.time()
-              logger.info("🚀 AI DIRECTOR ULTRA - STARTING PIPELINE")
+              logger.info("🚀 AI DIRECTOR ULTRA - STARTING")
               
               try:
-                  # 1. DOWNLOAD VIDEO
+                  # 1. DOWNLOAD
                   logger.info("=" * 50)
-                  logger.info("📥 STEP 1: Downloading video...")
                   downloader = VideoDownloader()
                   video_path = downloader.download()
                   
-                  # 2. TRANSCRIBE AUDIO
+                  # 2. TRANSCRIBE
                   logger.info("=" * 50)
-                  logger.info("🎤 STEP 2: Transcribing audio...")
                   transcriber = AudioTranscriber()
                   segments = transcriber.transcribe(video_path)
                   
                   if not segments:
-                      logger.error("❌ No segments transcribed. Exiting.")
+                      logger.error("❌ No segments transcribed")
                       sys.exit(1)
                   
                   # 3. AI ANALYSIS
                   logger.info("=" * 50)
-                  logger.info("🧠 STEP 3: AI Analysis...")
                   analyzer = AIAnalyzer()
                   clips = analyzer.analyze_segments(segments)
                   
                   if not clips:
-                      logger.error("❌ No clips generated. Exiting.")
+                      logger.error("❌ No clips generated")
                       sys.exit(1)
                   
                   # 4. VIDEO PRODUCTION
                   logger.info("=" * 50)
-                  logger.info("🎬 STEP 4: Video Production...")
                   producer = VideoProducer()
                   produced_clips = producer.produce_clips(video_path, clips)
                   
                   if not produced_clips:
-                      logger.error("❌ No clips produced. Exiting.")
+                      logger.error("❌ No clips produced")
                       sys.exit(1)
                   
-                  # 5. GENERATE REPORTS
+                  # 5. REPORTS
                   logger.info("=" * 50)
-                  logger.info("📊 STEP 5: Generating reports...")
                   processing_time = time.time() - start_time
                   report_gen = ReportGenerator()
                   report_gen.generate(produced_clips, processing_time)
                   
-                  # SUCCESS MESSAGE
+                  # SUCCESS
                   logger.info("=" * 50)
-                  logger.info("🎉 PIPELINE COMPLETED SUCCESSFULLY!")
-                  logger.info(f"📁 Output directory: {config.OUTDIR}")
-                  logger.info(f"⏱️  Total time: {processing_time:.2f} seconds")
-                  logger.info(f"🎬 Clips produced: {len(produced_clips)}")
-                  logger.info("=" * 50)
+                  logger.info("🎉 SUCCESS!")
+                  logger.info(f"📁 Output: {config.OUTDIR}")
+                  logger.info(f"⏱️  Time: {processing_time:.1f}s")
+                  logger.info(f"🎬 Clips: {len(produced_clips)}")
                   
-                  # List generated files
+                  # List files
                   logger.info("📄 Generated files:")
-                  for file in config.OUTDIR.glob("*"):
-                      if file.is_file():
-                          size_mb = file.stat().st_size / (1024 * 1024)
-                          logger.info(f"   - {file.name} ({size_mb:.2f} MB)")
+                  for ext in ['.mp4', '.json', '.md']:
+                      for file in config.OUTDIR.glob(f"*{ext}"):
+                          size = file.stat().st_size
+                          logger.info(f"   - {file.name} ({size/1024:.1f} KB)")
                   
-              except KeyboardInterrupt:
-                  logger.info("⚠️ Pipeline interrupted by user")
-                  sys.exit(130)
               except Exception as e:
-                  logger.error(f"❌ FATAL ERROR: {e}")
+                  logger.error(f"❌ FATAL: {e}")
                   import traceback
                   logger.error(traceback.format_exc())
                   sys.exit(1)
@@ -832,35 +877,67 @@ jobs:
               main()
           EOF
           
-          echo "🚀 Running AI Director Ultra..."
-          python ai_director_final.py
+          echo "🚀 Running AI Director Ultra (Fixed Video Encoding)..."
+          python ai_director_fixed_video.py
+          
+      - name: 🔍 Verify Video Files
+        run: |
+          echo "🔍 Checking video files..."
+          
+          if [ -d "output" ]; then
+            # Check each video file
+            for video in output/*.mp4 2>/dev/null; do
+              if [ -f "$video" ]; then
+                echo "📹 Checking: $(basename "$video")"
+                
+                # Get file info
+                filesize=$(stat -c%s "$video")
+                echo "   Size: $((filesize / 1024)) KB"
+                
+                # Try to get video info with ffprobe
+                if command -v ffprobe >/dev/null 2>&1; then
+                  duration=$(ffprobe -v error -show_entries format=duration \
+                    -of default=noprint_wrappers=1:nokey=1 "$video" 2>/dev/null || echo "N/A")
+                  echo "   Duration: ${duration}s"
+                  
+                  codec=$(ffprobe -v error -select_streams v:0 \
+                    -show_entries stream=codec_name \
+                    -of default=noprint_wrappers=1:nokey=1 "$video" 2>/dev/null || echo "N/A")
+                  echo "   Codec: $codec"
+                fi
+                
+                echo ""
+              fi
+            done
+            
+            # Count files
+            mp4_count=$(find output -name "*.mp4" -type f | wc -l)
+            json_count=$(find output -name "*.json" -type f | wc -l)
+            echo "📊 File counts:"
+            echo "   MP4 videos: $mp4_count"
+            echo "   JSON metadata: $json_count"
+          fi
           
       - name: 📦 Package Output
         run: |
-          echo "📁 Checking output directory..."
-          
           if [ -d "output" ] && [ "$(ls -A output/ 2>/dev/null)" ]; then
-            echo "✅ Output directory contains files:"
-            ls -la output/
-            
-            # Create timestamped archive
+            echo "📦 Creating archive..."
             TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-            zip -r "ai_director_output_$TIMESTAMP.zip" output/
-            echo "📦 Created archive: ai_director_output_$TIMESTAMP.zip"
+            zip -r "videos_$TIMESTAMP.zip" output/
+            echo "✅ Archive created: videos_$TIMESTAMP.zip"
           else
-            echo "⚠️ Output directory is empty or doesn't exist"
-            # Create empty output directory
+            echo "⚠️ No output to package"
             mkdir -p output
-            echo "No clips generated" > output/README.md
+            echo "No videos generated - check logs" > output/README.md
           fi
           
       - name: 📤 Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ai-director-output
+          name: ai-video-clips
           path: |
             output/
-            ai_director_output_*.zip
+            videos_*.zip
             ai_director.log
           retention-days: 7
           if-no-files-found: warn
@@ -868,19 +945,18 @@ jobs:
       - name: 📊 Generate Job Summary
         if: always()
         run: |
-          if [ -f "output/SUMMARY.md" ]; then
-            echo "## 🎬 AI Director Ultra - Production Summary" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            cat output/SUMMARY.md >> $GITHUB_STEP_SUMMARY
+          if [ -f "output/README.md" ]; then
+            cat output/README.md >> $GITHUB_STEP_SUMMARY
           else
             echo "## 🎬 AI Director Ultra" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "Workflow completed. Check artifacts for output." >> $GITHUB_STEP_SUMMARY
+            echo "Video production completed." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
             if [ -f "ai_director.log" ]; then
-              echo "" >> $GITHUB_STEP_SUMMARY
-              echo "### Last 20 lines of log:" >> $GITHUB_STEP_SUMMARY
+              echo "### Last status from log:" >> $GITHUB_STEP_SUMMARY
               echo '```' >> $GITHUB_STEP_SUMMARY
-              tail -20 ai_director.log >> $GITHUB_STEP_SUMMARY 2>/dev/null || echo "Log file empty" >> $GITHUB_STEP_SUMMARY
+              grep -E "(SUCCESS|ERROR|Created|Transcription|Analyzing)" ai_director.log | tail -10 >> $GITHUB_STEP_SUMMARY 2>/dev/null || echo "Log empty" >> $GITHUB_STEP_SUMMARY
               echo '```' >> $GITHUB_STEP_SUMMARY
             fi
           fi
@@ -888,7 +964,5 @@ jobs:
       - name: 🧹 Cleanup
         if: always()
         run: |
-          echo "🧹 Cleaning up workspace..."
           rm -rf workspace/ || true
-          rm -f ai_director_final.py || true
-          echo "✅ Cleanup complete"
+          rm -f ai_director_fixed_video.py || true
