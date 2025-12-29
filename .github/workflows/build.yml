@@ -1,181 +1,245 @@
-name: Viral Video Automation
+name: Viral Shorts — single-run pipeline
 
 on:
-  push:
-    branches: [ "main" ]
   workflow_dispatch:
+    inputs:
+      video_url:
+        description: 'Direct MP4 URL (will follow redirects)'
+        required: true
+        default: 'https://api.vidssave.com/api/contentsite_api/media/download_redirect?request=sgRpmKL3iNBpyIDr4IgGHBXJiSxcf0EYQuGexs_6KdEalT5ycrs3ffYBEZXevrdUBcrNn6iDw8MfLNTFhlNy7biCIOWf4sDWWBA_S3Gc0ACg1ZPIBzwNN6iyUU-0-PuEErnV6vklMuUiHCyNARF0XKYdjAEXIFyrKF3ytFZL3SURwBQ6zqTIxoinSGmbNRzuDj7GLLN2-qE4j55wtrmuN0sRuMHC3v3eqf14UHFW6OQMmpQ5sIwzvVB6Y5OhROhLgjaA0g8XRTd1z8-rT37YaXo2Y1N59CFMiBNLYoMKlQY-ogHXajXJ3IPsDSTl679jtoOgZpQQY4lq8X-k8lRdgZ5x16iwKPU9AC5d20FwHAFwPaA6sqqj6Sulox0JtTHVQT3xcaUUJowztbrK3N1wClY_bp0pTnhFn4ntpiJhobshFeQwTW0cvTh7u-DnwrB6zF3N3uAfdG9YkBFZZfMIps_fqAN_JZe1TE8Xy6dOcm1cAkp4CQA-6VSb2h75I3aACfjLy872k1vGM7UyG_aS1MqWJUICirs_GRhll-ZswtvtiONJHwWROte6JB-8vU4YEOzzqQAnMb6vwwKFoFArv6XjRP9hX__3UF6yn8R7YYtp9bMuc53-ovjN9sdZoX02'
+      whisper_model:
+        description: 'Whisper model: tiny | base | small | medium | large'
+        required: false
+        default: 'tiny'
+      num_shorts:
+        description: 'Number of short clips to produce'
+        required: false
+        default: '6'
+      min_duration:
+        description: 'Minimum clip duration (seconds)'
+        required: false
+        default: '6'
+      max_duration:
+        description: 'Maximum clip duration (seconds)'
+        required: false
+        default: '30'
 
 jobs:
-  process-video:
+  build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
     steps:
-      - name: Checkout Repository
+      - name: Checkout (required for workflow UI)
         uses: actions/checkout@v4
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
-      - name: Install Dependencies
+      - name: Install system packages
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg wget
-          pip install faster-whisper numpy openai tqdm torch
+          sudo apt-get update -y
+          sudo apt-get install -y ffmpeg zip curl
 
-      - name: Run Video Processing
-        shell: python
+      - name: Install Python packages
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          # lightweight and robust installs; whisper from GitHub to ensure latest
+          python -m pip install -q yt-dlp ffmpeg-python scenedetect
+          # install whisper (local) — CPU wheel; GitHub runner CPU-only is expected
+          python -m pip install -q git+https://github.com/openai/whisper.git
+          # If pip tries to install heavy torch, it may take time. We accept default CPU install here.
+      - name: Run pipeline (download / transcribe / cut / zip)
         env:
-          # Masukkan URL Video di sini (Bisa diganti lewat Secrets kalau mau lebih aman)
-          VIDEO_URL: "https://api.vidssave.com/api/contentsite_api/media/download_redirect?request=sgRpmKL3iNBpyIDr4IgGHBXJiSxcf0EYQuGexs_6KdEalT5ycrs3ffYBEZXevrdUBcrNn6iDw8MfLNTFhlNy7biCIOWf4sDWWBA_S3Gc0ACg1ZPIBzwNN6iyUU-0-PuEErnV6vklMuUiHCyNARF0XKYdjAEXIFyrKF3ytFZL3SURwBQ6zqTIxoinSGmbNRzuDj7GLLN2-qE4j55wtrmuN0sRuMHC3v3eqf14UHFW6OQMmpQ5sIwzvVB6Y5OhROhLgjaA0g8XRTd1z8-rT37YaXo2Y1N59CFMiBNLYoMKlQY-ogHXajXJ3IPsDSTl679jtoOgZpQQY4lq8X-k8lRdgZ5x16iwKPU9AC5d20FwHAFwPaA6sqqj6Sulox0JtTHVQT3xcaUUJowztbrK3N1wClY_bp0pTnhFn4ntpiJhobshFeQwTW0cvTh7u-DnwrB6zF3N3uAfdG9YkBFZZfMIps_fqAN_JZe1TE8Xy6dOcm1cAkp4CQA-6VSb2h75I3aACfjLy872k1vGM7UyG_aS1MqWJUICirs_GRhll-ZswtvtiONJHwWROte6JB-8vU4YEOzzqQAnMb6vwwKFoFArv6XjRP9hX__3UF6yn8R7YYtp9bMuc53-ovjN9sdZoX02"
-          # API Key Hardcoded sesuai request (Sebaiknya pakai Secrets)
-          OPENAI_API_KEY: "Kontolondon"
-          OPENAI_BASE_URL: "https://tes-coral.vercel.app/v1/"
+          VIDEO_URL: ${{ github.event.inputs.video_url }}
+          WHISPER_MODEL: ${{ github.event.inputs.whisper_model }}
+          NUM_SHORTS: ${{ github.event.inputs.num_shorts }}
+          MIN_DURATION: ${{ github.event.inputs.min_duration }}
+          MAX_DURATION: ${{ github.event.inputs.max_duration }}
         run: |
-          import os, sys, subprocess, json, re
-          from pathlib import Path
-          import torch
-          from openai import OpenAI
+          set -euo pipefail
+          OUTDIR=output
+          TMPDIR=$(mktemp -d)
+          echo "WORK TMPDIR=$TMPDIR"
+          echo "Downloading video (follow redirects)..."
+          curl -L "$VIDEO_URL" -o "$TMPDIR/video.mp4"
+          ls -lh "$TMPDIR" || true
 
-          print("="*60)
-          print("DIRECT MEMORY EXECUTION (NO MAIN.PY)")
-          print("="*60)
+          python - <<'PY'
+import os, json, math, subprocess
+from pathlib import Path
+tmp = Path(os.environ['TMPDIR'])
+video = tmp / "video.mp4"
+outdir = Path("output")
+outdir.mkdir(parents=True, exist_ok=True)
 
-          # --- CONFIG ---
-          VIDEO_URL = os.environ.get("VIDEO_URL")
-          API_KEY = os.environ.get("OPENAI_API_KEY")
-          API_BASE = os.environ.get("OPENAI_BASE_URL")
-          
-          BASE_DIR = Path.cwd()
-          OUTPUT_DIR = BASE_DIR / "output"
-          MODELS_DIR = BASE_DIR / "models"
-          VIDEO_PATH = BASE_DIR / "video.mp4"
-          AUDIO_PATH = BASE_DIR / "audio.wav"
-          ZIP_PATH = BASE_DIR / "viral_segments.zip"
-          
-          OUTPUT_DIR.mkdir(exist_ok=True)
-          MODELS_DIR.mkdir(exist_ok=True)
+def run(cmd):
+    p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if p.returncode != 0:
+        raise RuntimeError(f"Command {' '.join(cmd)} failed: {p.stderr}")
+    return p.stdout
 
-          # --- 1. DOWNLOAD WITH WGET ---
-          print(f"\n📥 DOWNLOADING via WGET...")
-          try:
-              # Pake wget -O video.mp4 "URL"
-              cmd = ["wget", "-O", str(VIDEO_PATH), VIDEO_URL]
-              subprocess.run(cmd, check=True)
-              
-              if not VIDEO_PATH.exists() or VIDEO_PATH.stat().st_size < 1000:
-                  print("❌ Download gagal: File kosong/tidak ada")
-                  sys.exit(1)
-              print(f"✅ Download OK: {VIDEO_PATH.stat().st_size / (1024*1024):.2f} MB")
-          except Exception as e:
-              print(f"❌ Wget Error: {e}")
-              sys.exit(1)
+def get_duration(path):
+    try:
+        out = run(["ffprobe","-v","error","-show_entries","format=duration","-of","default=noprint_wrappers=1:nokey=1", str(path)])
+        return float(out.strip())
+    except Exception:
+        return 0.0
 
-          # --- 2. EXTRACT AUDIO ---
-          print("\n🔄 EXTRACTING AUDIO...")
-          subprocess.run([
-              "ffmpeg", "-y", "-i", str(VIDEO_PATH), "-vn",
-              "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
-              str(AUDIO_PATH)
-          ], check=True, stderr=subprocess.DEVNULL)
+# Transcribe with local whisper
+model_name = os.environ.get("WHISPER_MODEL","tiny")
+print(f"Loading whisper model: {model_name}")
+import whisper
+model = whisper.load_model(model_name)
+print("Transcribing... (this may take a while)")
+result = model.transcribe(str(video))
+segments = result.get("segments", [])
+print(f"Transcription segments: {len(segments)}")
 
-          # --- 3. TRANSCRIBE ---
-          print("\n🎙️ TRANSCRIBING...")
-          from faster_whisper import WhisperModel
-          model = WhisperModel("medium", device="cpu", compute_type="int8", download_root=str(MODELS_DIR))
-          segments, info = model.transcribe(str(AUDIO_PATH), beam_size=5)
-          
-          transcript_segs = []
-          full_text = ""
-          for s in segments:
-              transcript_segs.append({"start": s.start, "end": s.end, "text": s.text.strip()})
-              full_text += s.text + " "
-          
-          print(f"✅ Transcribed {len(transcript_segs)} segments ({info.duration:.1f}s)")
+# Scene detection (try scenedetect; fallback to fixed windows)
+scenes = []
+try:
+    from scenedetect import VideoManager, SceneManager
+    from scenedetect.detectors import ContentDetector
+    vm = VideoManager([str(video)])
+    sm = SceneManager()
+    sm.add_detector(ContentDetector(threshold=30.0))
+    vm.start()
+    sm.detect_scenes(frame_source=vm)
+    scene_list = sm.get_scene_list()
+    vm.release()
+    for idx,(s,e) in enumerate(scene_list):
+        scenes.append({"start": s.get_seconds(), "end": e.get_seconds(), "scene_id": idx})
+    if not scenes:
+        scenes = [{"start":0.0, "end": get_duration(video), "scene_id":0}]
+except Exception as e:
+    dur = get_duration(video)
+    win = 10.0
+    t = 0.0
+    idx = 0
+    while t < dur:
+        scenes.append({"start": t, "end": min(dur, t+win), "scene_id": idx})
+        idx += 1
+        t += win
 
-          # --- 4. GPT ANALYSIS ---
-          print("\n🧠 GPT-4 ANALYSIS...")
-          client = OpenAI(api_key=API_KEY, base_url=API_BASE)
-          
-          # Context limit biar gak error token
-          txt_context = ""
-          for s in transcript_segs[:80]: 
-              txt_context += f"[{s['start']:.1f}-{s['end']:.1f}] {s['text']}\n"
-          
-          prompt = """You are a video editor. Task: Extract viral short clips (vertical format).
-          RULES:
-          1. Return JSON ARRAY ONLY.
-          2. Each segment MUST be under 60 seconds.
-          3. Timestamps must be pure numbers (e.g. 10.5), DO NOT add 's'.
+def score_text_segment(text):
+    if not text: return 0.0
+    txt = text.lower()
+    keywords = ["wow","amazing","unbelievable","incredible","shocking","surprise","applause","laugh","lol","!","?","shout","scream"]
+    s = 0.0
+    for k in keywords:
+        if k in txt:
+            s += 1.5
+    words = len(txt.split())
+    s += min(3.0, math.log1p(words))
+    return s
 
-          Format: [{"start_time": 10.0, "end_time": 30.0, "title": "Topic"}]"""
+# Build proposals from transcript segments
+proposals = []
+min_d = float(os.environ.get("MIN_DURATION","6"))
+max_d = float(os.environ.get("MAX_DURATION","30"))
+for seg in segments:
+    s0 = seg.get("start",0.0)
+    e0 = seg.get("end", s0 + max_d)
+    dur = e0 - s0
+    if dur <= 0:
+        dur = min_d
+        e0 = s0 + dur
+    expand = min(2.0, (max_d - dur)/2.0)
+    s = max(0.0, s0 - expand)
+    e = min(e0 + expand, s + max_d)
+    if e - s < min_d:
+        e = s + min_d
+    text_score = score_text_segment(seg.get("text",""))
+    scene_bonus = 0.0
+    for sc in scenes:
+        if seg.get("start",0) < sc["end"] and seg.get("end",0) >= sc["end"] - 1.0:
+            scene_bonus += 1.0
+    total = text_score + scene_bonus
+    proposals.append({"start": s, "end": e, "score": total, "text": seg.get("text","")})
 
-          try:
-              resp = client.chat.completions.create(
-                  model="gpt-4",
-                  messages=[
-                      {"role": "system", "content": prompt},
-                      {"role": "user", "content": f"Duration: {info.duration}s\nTranscript:\n{txt_context}"}
-                  ],
-                  temperature=0.7
-              )
-              gpt_content = resp.choices[0].message.content.strip()
-          except Exception as e:
-              print(f"❌ GPT Error: {e}")
-              sys.exit(1)
+# fallback fixed windows if no proposals
+if not proposals:
+    dur = get_duration(video)
+    t = 0.0
+    while t < dur:
+        proposals.append({"start": t, "end": min(dur, t+max_d), "score":1.0, "text":""})
+        t += max_d
 
-          # --- 5. PARSE & CUT ---
-          def safe_float(val):
-              try: return float(str(val).lower().replace('s', '').strip())
-              except: return 0.0
+# select top non-overlapping proposals
+proposals_sorted = sorted(proposals, key=lambda x: x["score"], reverse=True)
+selected = []
+occupied = []
+num_short = int(os.environ.get("NUM_SHORTS","6"))
+for p in proposals_sorted:
+    if len(selected) >= num_short: break
+    s,e = p["start"], p["end"]
+    overlap = False
+    for o in occupied:
+        if not (e <= o[0] or s >= o[1]):
+            overlap = True; break
+    if not overlap:
+        selected.append(p)
+        occupied.append((s,e))
 
-          print("\n✂️ CUTTING VIDEO...")
-          match = re.search(r'\[.*\]', gpt_content, re.DOTALL)
-          if match:
-              data = json.loads(match.group(0))
-              files_created = []
-              
-              for i, item in enumerate(data, 1):
-                  start = safe_float(item.get('start_time', 0))
-                  end = safe_float(item.get('end_time', 0))
-                  
-                  if (end - start) > 60: end = start + 60
-                  if (end - start) < 2: continue
-                  
-                  safe_name = re.sub(r'[^\w\s-]', '', item.get('title', 'clip')).strip().replace(" ", "_")[:30]
-                  out_path = OUTPUT_DIR / f"clip_{i}_{safe_name}.mp4"
-                  
-                  print(f"   Processing: {start}-{end}s -> {out_path.name}")
-                  
-                  subprocess.run([
-                      "ffmpeg", "-y", "-ss", str(start), "-to", str(end),
-                      "-i", str(VIDEO_PATH),
-                      "-c:v", "libx264", "-c:a", "aac",
-                      "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black",
-                      str(out_path)
-                  ], stderr=subprocess.DEVNULL)
-                  
-                  if out_path.exists(): files_created.append(out_path)
+# ensure selected count
+if len(selected) < num_short:
+    # append further windows from timeline
+    dur = get_duration(video)
+    t = 0.0
+    idx = 0
+    while len(selected) < num_short and t < dur:
+        s = t; e = min(dur, t + max_d)
+        # avoid overlap
+        ok = True
+        for o in occupied:
+            if not (e <= o[0] or s >= o[1]):
+                ok = False; break
+        if ok:
+            selected.append({"start":s,"end":e,"score":0.0,"text":""})
+            occupied.append((s,e))
+        t = e
+        idx += 1
 
-              # --- 6. ZIP ---
-              if files_created:
-                  import zipfile
-                  print(f"\n📦 Zipping {len(files_created)} files...")
-                  with zipfile.ZipFile(ZIP_PATH, 'w', zipfile.ZIP_DEFLATED) as zf:
-                      for f in files_created: zf.write(f, f.name)
-                  print("✅ DONE")
-              else:
-                  print("⚠️ No valid clips generated.")
-          else:
-              print("❌ No JSON found in GPT response")
+# cut clips with ffmpeg
+import shlex
+OUT = Path("output")
+CLIPS_DIR = OUT / "clips"
+CLIPS_DIR.mkdir(parents=True, exist_ok=True)
+results = []
+for i,p in enumerate(selected):
+    s = p["start"]; e = p["end"]; dur = e - s
+    fname = f"clip_{i:02d}_{int(round(s))}-{int(round(e))}.mp4"
+    outp = CLIPS_DIR / fname
+    cmd = ["ffmpeg","-y","-ss",str(s),"-i",str(video),"-t",str(dur),"-c","copy", str(outp)]
+    print("Running ffmpeg:", " ".join(cmd))
+    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if proc.returncode != 0:
+        # fallback re-encode
+        cmd2 = ["ffmpeg","-y","-ss",str(s),"-i",str(video),"-t",str(dur),"-c:v","libx264","-c:a","aac", str(outp)]
+        subprocess.run(cmd2, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    results.append({"idx": i, "start": round(s,3), "end": round(e,3), "duration": round(dur,3), "score": p.get("score",0.0), "text": p.get("text",""), "path": str(outp.resolve())})
 
-      - name: Upload Result
+# write data.json
+data = {
+    "source": str(video.resolve()),
+    "duration": get_duration(video),
+    "num_clips": len(results),
+    "clips": results,
+    "transcripts_count": len(segments),
+    "scenes_count": len(scenes),
+}
+with open("output/data.json","w",encoding="utf-8") as f:
+    json.dump(data, f, indent=2, ensure_ascii=False)
+
+print("Wrote output/data.json")
+PY
+
+          # create zip for artifact
+          zip -r output.zip output
+
+      - name: Upload artifact (output.zip)
         uses: actions/upload-artifact@v4
-        if: always()
         with:
-          name: viral-video-results
-          path: viral_segments.zip
-          retention-days: 5
+          name: viral-shorts-output
+          path: output.zip
