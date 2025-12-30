@@ -6,7 +6,7 @@ on:
       video_url:
         description: 'URL Video (YouTube/MP4/M3U8)'
         required: true
-        default: 'https://api.vidssave.com/api/contentsite_api/media/download_redirect?request=sgRpmKL3iNBpyIDr4IgGHBXJiSxcf0EYQuGexs_6KdEalT5ycrs3ffYBEZXevrdUBcrNn6iDw8MfLNTFhlNy7biCIOWf4sDWWBA_S3Gc0ACg1ZPIBzwNN6iyUU-0-PuEErnV6vklMuUiHCyNARF0XK'
+        default: 'https://api.vidssave.com/api/contentsite_api/media/download_redirect?request=sgRpmKL3iNBpyIDr4IgGHBXJiSxcf0EYQuGexs_6KdEalT5ycrs3ffyBEZXevrdUBcrNn6iDw8MfLNTFhlNy7biCIOWf4sDWWBA_S3Gc0ACg1ZPIBzwNN6iyUU-0-PuEErnV6vklMuUiHCyNARF0XK'
 
 jobs:
   auto-shorts-generator:
@@ -79,7 +79,8 @@ jobs:
 
       - name: 🤖 Create Intelligent AI Pipeline
         run: |
-          cat > auto_shorts_ai.py << 'EOF'
+          # Masalah biasanya ada di sini - pastikan string literal dengan EOF tidak terinterupsi
+          cat > auto_shorts_ai.py << 'PYTHON_EOF'
 #!/usr/bin/env python3
 """
 🚀 AI SHORTS GENERATOR - AUTO INTELLIGENCE
@@ -1016,7 +1017,7 @@ if __name__ == "__main__":
         print("❌ PIPELINE FAILED!")
         print("=" * 60)
         sys.exit(1)
-EOF
+PYTHON_EOF
 
           echo "✅ Intelligent AI Pipeline created"
 
@@ -1090,9 +1091,9 @@ EOF
 ### AI Decisions Made:
 
 $(if [ -f "output/ai_auto_report.json" ]; then
-  echo "```json"
+  echo "\`\`\`json"
   cat output/ai_auto_report.json | python3 -c "import json,sys; d=json.load(sys.stdin); print(json.dumps(d['summary'], indent=2))"
-  echo "```"
+  echo "\`\`\`"
 fi)
 
 ### Files Included:
