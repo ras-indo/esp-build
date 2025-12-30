@@ -125,7 +125,6 @@ jobs:
               # Gunakan language="auto" agar model mendeteksi bahasa secara otomatis (multilingual)
               result = model.transcribe(
                   str(VIDEO_PATH),
-                  language="auto",
                   task="transcribe"
               )
               return result["segments"]
