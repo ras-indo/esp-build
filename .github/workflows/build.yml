@@ -38,7 +38,7 @@ jobs:
       - name: ⚙️ Install System Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg libsm6 libxext6 libgl1-mesa-glx libglib2.0-0 wget curl unzip sox libsox-fmt-mp3
+          sudo apt-get install -y ffmpeg libsm6 libxext6 libgl1 libglib2.0-0 wget curl unzip sox libsox-fmt-mp3
 
       - name: 📦 Install AI & Video Packages
         run: |
@@ -59,7 +59,7 @@ jobs:
       - name: 🤖 Create Intelligent AI Pipeline
         run: |
           # Create the Python script with proper escaping
-          cat > auto_shorts_ai.py << "SCRIPT_EOF"
+          cat > auto_shorts_ai.py << 'SCRIPT_EOF'
 #!/usr/bin/env python3
 """
 🚀 AI SHORTS GENERATOR - AUTO INTELLIGENCE
@@ -164,11 +164,13 @@ class AIClipSelector:
         prompt = self._create_prompt(transcript, video_duration, num_clips)
         
         try:
-            import openai
-            openai.api_key = self.api_key
-            openai.api_base = self.base_url
+            from openai import OpenAI
+            client = OpenAI(
+                api_key=self.api_key,
+                base_url=self.base_url
+            )
             
-            response = openai.ChatCompletion.create(
+            response = client.chat.completions.create(
                 model=self.model,
                 messages=[
                     {"role": "system", "content": "You are a viral content expert for short videos."},
