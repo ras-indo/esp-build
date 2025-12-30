@@ -1,4 +1,4 @@
-name: 🧠 Viral Shorts — AI Brain (Fixed Pillow)
+name: 🧠 Viral Shorts — AI Brain (LLM-only Enforcement)
 
 on:
   workflow_dispatch:
@@ -17,10 +17,10 @@ on:
         default: '0.7'
 
 jobs:
-  ai-editor-custom:
+  ai-editor-llm-only:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Code
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Setup Python
@@ -28,443 +28,368 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install System Libraries
+      - name: Install system packages
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y ffmpeg libsm6 libxext6 libgl1
+          sudo apt-get install -y ffmpeg libsm6 libxext6 libgl1 unzip
 
-      - name: Install Python Dependencies
+      - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install -q wheel setuptools
-
-          # Install Pillow versi 9.5.0 untuk menghindari ANTIALIAS error
           python -m pip install -q "Pillow==9.5.0"
-
-          # Dependencies dasar
           python -m pip install -q yt-dlp openai tiktoken
           python -m pip install -q numpy==1.24.0
           python -m pip install -q imageio imageio[ffmpeg]
-
-          # LangChain versi stabil
           python -m pip install -q "langchain==0.1.16" "langchain-core==0.1.44" "langchain-openai==0.0.8"
-
-          # Upgrade Whisper -> kita gunakan openai-whisper (medium model)
           python -m pip install -q --upgrade openai-whisper
-
-          # MoviePy
           python -m pip install -q "moviepy==1.0.3" decorator tqdm proglog
+          # debug prints
+          python - <<'PY'
+import pkg_resources, sys
+print("Python", sys.version.split()[0])
+for pkg in ["openai-whisper","moviepy","Pillow","langchain","yt_dlp"]:
+    try:
+        print(pkg, pkg_resources.get_distribution(pkg).version)
+    except Exception:
+        print(pkg, "not found")
+PY
 
-      - name: Create AI Editor Script
+      - name: Create AI Editor Script (LLM-only enforcement)
         run: |
           cat > ai_editor.py << 'EOF'
-          import os
-          import json
-          import subprocess
-          import sys
-          import whisper
-          from pathlib import Path
-
-          # === IMPORTS LANGCHAIN ===
-          try:
-              from langchain_openai import ChatOpenAI
-              from langchain_core.prompts import ChatPromptTemplate
-              print("✅ LangChain imports berhasil")
-          except ImportError as e:
-              print(f"❌ Error import LangChain: {e}")
-              sys.exit(1)
-
-          # === IMPORTS MOVIEPY ===
-          try:
-              from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip, ColorClip
-              from moviepy.video.fx.all import resize
-              print("✅ MoviePy imports berhasil")
-          except ImportError as e:
-              print(f"❌ Error import MoviePy: {e}")
-              sys.exit(1)
-
-          # === KONFIGURASI ===
-          CUSTOM_API_KEY = "Kontolondon"
-          CUSTOM_BASE_URL = "https://tes-coral.vercel.app/v1/"
-
-          VIDEO_URL = os.environ.get("VIDEO_URL")
-          NUM_CLIPS = int(os.environ.get("NUM_SHORTS", 5))
-          TEMPERATURE = float(os.environ.get("AI_CREATIVITY", 0.7))
-
-          WORKDIR = Path("workspace")
-          WORKDIR.mkdir(exist_ok=True)
-          OUTDIR = Path("output")
-          OUTDIR.mkdir(parents=True, exist_ok=True)
-          VIDEO_PATH = WORKDIR / "source.mp4"
-
-          # === 1. DOWNLOAD VIDEO ===
-          def download_video():
-              print("⬇️ Downloading video...")
-              try:
-                  subprocess.run([
-                      "yt-dlp", VIDEO_URL,
-                      "-o", str(VIDEO_PATH),
-                      "--force-overwrites",
-                      "--quiet"
-                  ], check=True, stderr=subprocess.DEVNULL)
-              except subprocess.CalledProcessError:
-                  print("🔄 yt-dlp gagal, mencoba curl...")
-                  subprocess.run(["curl", "-L", VIDEO_URL, "-o", str(VIDEO_PATH)],
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-              if VIDEO_PATH.exists() and VIDEO_PATH.stat().st_size > 1000:
-                  print(f"✅ Video siap ({VIDEO_PATH.stat().st_size // 1024} KB)")
-              else:
-                  raise Exception("❌ Gagal download video.")
-
-          # === 2. WHISPER TRANSCRIPTION (MEDIUM MULTILINGUAL) ===
-          def transcribe_video():
-              print("👂 Menggunakan Whisper (medium) untuk transkripsi...")
-              # Load medium model (multilingual)
-              model = whisper.load_model("medium")
-              # Gunakan language="auto" agar model mendeteksi bahasa secara otomatis (multilingual)
-              result = model.transcribe(
-                  str(VIDEO_PATH),
-                  task="transcribe"
-              )
-              return result["segments"]
-
-          # === 3. AI EDITORIAL DECISION ===
-          def ai_editorial_decision(segments):
-              print("🧠 AI Editor menganalisis konten...")
-
-              # Format transkrip
-              transcript_lines = []
-              for seg in segments[:50]:
-                  start_min = int(seg['start']) // 60
-                  start_sec = int(seg['start']) % 60
-                  text = seg['text'].strip()
-                  transcript_lines.append(f"[{start_min:02d}:{start_sec:02d}] {text}")
-
-              transcript_text = "\n".join(transcript_lines)
-
-              # Inisialisasi LLM
-              llm = ChatOpenAI(
-                  temperature=TEMPERATURE,
-                  model="gpt-4",
-                  openai_api_key=CUSTOM_API_KEY,
-                  openai_api_base=CUSTOM_BASE_URL,
-                  max_tokens=2000
-              )
-
-              # Prompt template
-              prompt_template = """
-              Kamu adalah Editor Video Professional untuk konten Shorts/TikTok/Reels.
-
-              TUGAS: Pilih {num_clips} klip terbaik dari transkrip video berikut.
-
-              KRITERIA KLIP VIRAL:
-              1. Hook kuat di 3 detik pertama
-              2. Cerita yang koheren dan lengkap
-              3. Emosi yang kuat (lucu, mengejutkan, informatif, atau mengharukan)
-              4. Durasi ideal: 15-60 detik
-              5. Hindari bagian intro/outro yang membosankan
-
-              OUTPUT FORMAT (JSON):
-              {{
-                "clips": [
-                  {{
-                    "start_time": 10.5,
-                    "end_time": 45.2,
-                    "title": "Judul klip 1",
-                    "viral_reasoning": "Alasan kenapa klip ini viral",
-                    "emotion": "funny"
-                  }}
-                ]
-              }}
-
-              INSTRUKSI:
-              - start_time dan end_time dalam detik (angka desimal)
-              - Durasi minimal 15 detik, maksimal 90 detik
-              - Emotion: funny, surprising, informative, emotional, neutral
-              - Jumlah klip: {num_clips}
-
-              TRANSCRIPT:
-              {transcript}
-
-              Hanya kembalikan JSON, tidak ada teks lain.
-              """
-
-              prompt = ChatPromptTemplate.from_template(prompt_template)
-
-              messages = prompt.format_messages(
-                  num_clips=NUM_CLIPS,
-                  transcript=transcript_text[:8000]
-              )
-
-              try:
-                  print("🔄 Memproses dengan AI...")
-                  response = llm.invoke(messages)
-                  content = response.content.strip()
-
-                  # Bersihkan response
-                  if "```json" in content:
-                      content = content.split("```json")[1].split("```")[0].strip()
-                  elif "```" in content:
-                      content = content.split("```")[1].split("```")[0].strip()
-
-                  # Parse JSON
-                  import json as json_module
-                  parsed_data = json_module.loads(content)
-                  clips = parsed_data.get("clips", [])
-
-                  # Validasi klip
-                  valid_clips = []
-                  for clip in clips:
-                      if not all(key in clip for key in ["start_time", "end_time", "title", "viral_reasoning", "emotion"]):
-                          continue
-
-                      try:
-                          start = float(clip["start_time"])
-                          end = float(clip["end_time"])
-                          duration = end - start
-
-                          if 15 <= duration <= 90:
-                              valid_clips.append(clip)
-                          else:
-                              print(f"⚠️ Klip dibuang: durasi {duration:.1f}s")
-                      except ValueError:
-                          continue
-
-                  print(f"✅ Ditemukan {len(valid_clips)} klip valid")
-                  return valid_clips
-
-              except Exception as e:
-                  print(f"❌ Error AI: {str(e)}")
-                  if 'response' in locals():
-                      print(f"Response: {response.content[:200]}")
-                  return []
-
-          # === 4. VIDEO CUTTING DENGAN MOVIEPY ===
-          def cut_and_save(clips_data):
-              print("✂️ Memotong video dengan MoviePy...")
-
-              if not clips_data:
-                  print("⚠️ Tidak ada klip untuk dipotong")
-                  return
-
-              try:
-                  source_video = VideoFileClip(str(VIDEO_PATH))
-                  print(f"📹 Video loaded: {source_video.duration:.1f}s, {source_video.size}")
-              except Exception as e:
-                  print(f"❌ Gagal load video: {e}")
-                  return
-
-              for idx, clip in enumerate(clips_data):
-                  try:
-                      start = float(clip["start_time"])
-                      end = float(clip["end_time"])
-
-                      # Validasi waktu
-                      if start >= end:
-                          print(f"⚠️ Klip {idx+1}: start >= end, dilewati")
-                          continue
-
-                      if start > source_video.duration:
-                          print(f"⚠️ Klip {idx+1}: start melebihi durasi video")
-                          continue
-
-                      # Adjust end time jika perlu
-                      if end > source_video.duration:
-                          end = source_video.duration
-
-                      duration = end - start
-
-                      if duration < 5:
-                          print(f"⚠️ Klip {idx+1}: terlalu pendek ({duration:.1f}s)")
-                          continue
-
-                      # Nama file
-                      emotion = clip.get("emotion", "neutral")
-                      filename = f"short_{idx+1:02d}_{emotion}.mp4"
-                      out_path = OUTDIR / filename
-                      json_path = OUTDIR / f"short_{idx+1:02d}_meta.json"
-
-                      print(f"🔄 Processing klip {idx+1}: {start:.1f}s - {end:.1f}s ({duration:.1f}s)")
-
-                      # Potong video
-                      subclip = source_video.subclip(start, end)
-
-                      # Fungsi resize dengan monkey patch untuk ANTIALIAS
-                      def resize_with_fallback(clip, width=None, height=None):
-                          """Resize function with fallback for ANTIALIAS error"""
-                          try:
-                              # Coba resize biasa dulu
-                              from moviepy.video.fx.all import resize as moviepy_resize
-                              return moviepy_resize(clip, width=width, height=height)
-                          except AttributeError as e:
-                              if "ANTIALIAS" in str(e):
-                                  print("⚠️ ANTIALIAS error, menggunakan resize manual...")
-                                  # Gunakan resize manual tanpa ANTIALIAS
-                                  from PIL import Image
-                                  import numpy as np
-
-                                  def resize_frame(frame):
-                                      # Convert numpy array to PIL Image
-                                      pil_img = Image.fromarray(frame)
-
-                                      # Calculate new size
-                                      original_width, original_height = pil_img.size
-
-                                      if width and height:
-                                          new_size = (width, height)
-                                      elif width:
-                                          ratio = width / original_width
-                                          new_size = (width, int(original_height * ratio))
-                                      elif height:
-                                          ratio = height / original_height
-                                          new_size = (int(original_width * ratio), height)
-                                      else:
-                                          return frame
-
-                                      # Resize with LANCZOS (replacement for ANTIALIAS)
-                                      resized_img = pil_img.resize(new_size, Image.Resampling.LANCZOS)
-
-                                      # Convert back to numpy array
-                                      return np.array(resized_img)
-
-                                  # Apply resize to setiap frame
-                                  return clip.fl_image(resize_frame)
-                              else:
-                                  raise e
-
-                      # Konversi ke vertikal (1080x1920) - SEDERHANA
-                      def convert_to_vertical(clip):
-                          w, h = clip.size
-                          target_w, target_h = 1080, 1920
-
-                          # Calculate scale factor to fit height
-                          scale = target_h / h
-                          new_w = int(w * scale)
-                          new_h = target_h
-
-                          # Resize
-                          resized = resize_with_fallback(clip, width=new_w, height=new_h)
-
-                          # Jika terlalu lebar, crop tengah
-                          if new_w > target_w:
-                              x_center = (new_w - target_w) // 2
-                              return resized.crop(x1=x_center, y1=0, x2=x_center + target_w, y2=target_h)
-                          else:
-                              # Tambah background hitam di samping
-                              background = ColorClip(
-                                  size=(target_w, target_h),
-                                  color=(0, 0, 0),
-                                  duration=clip.duration
-                              )
-
-                              x_pos = (target_w - new_w) // 2
-                              final = CompositeVideoClip([
-                                  background,
-                                  resized.set_position((x_pos, 0))
-                              ])
-                              return final
-
-                      # Konversi ke format vertikal
-                      vertical_clip = convert_to_vertical(subclip)
-
-                      # Export video
-                      print(f"💾 Saving {filename}...")
-                      vertical_clip.write_videofile(
-                          str(out_path),
-                          codec='libx264',
-                          audio_codec='aac',
-                          fps=30,
-                          preset='fast',
-                          audio_bitrate='128k',
-                          threads=4,
-                          logger=None,
-                          verbose=False
-                      )
-
-                      # Cleanup
-                      vertical_clip.close()
-                      subclip.close()
-
-                      # Simpan metadata
-                      metadata = {
-                          "filename": filename,
-                          "title": clip.get("title", f"Klip {idx+1}"),
-                          "reasoning": clip.get("viral_reasoning", ""),
-                          "emotion": emotion,
-                          "timing": {"start": start, "end": end, "duration": duration},
-                          "resolution": "1080x1920"
-                      }
-
-                      with open(json_path, "w", encoding="utf-8") as f:
-                          json.dump(metadata, f, indent=2, ensure_ascii=False)
-
-                      print(f"✅ {filename} ({duration:.1f}s)")
-
-                  except Exception as ex:
-                      print(f"❌ Error klip {idx+1}: {str(ex)}")
-                      import traceback
-                      traceback.print_exc()
-
-              # Cleanup
-              source_video.close()
-
-          # === 5. MAIN EXECUTION ===
-          def main():
-              print("=" * 50)
-              print("🧠 VIRAL SHORTS - AI BRAIN EDITOR")
-              print("=" * 50)
-
-              try:
-                  # Langkah 1: Download
-                  download_video()
-
-                  # Langkah 2: Transkripsi
-                  segments = transcribe_video()
-                  print(f"📝 Transkripsi selesai: {len(segments)} segmen")
-
-                  # Langkah 3: Analisis AI
-                  selected_clips = ai_editorial_decision(segments)
-
-                  # Langkah 4: Potong video
-                  if selected_clips:
-                      cut_and_save(selected_clips)
-
-                      # Ringkasan
-                      print("\n" + "=" * 50)
-                      print("🎬 RINGKASAN OUTPUT:")
-                      total_duration = 0
-                      for i, clip in enumerate(selected_clips):
-                          duration = float(clip["end_time"]) - float(clip["start_time"])
-                          total_duration += duration
-                          print(f"{i+1}. {clip.get('title', 'Tanpa judul')}")
-                          print(f"   ⏱️  {clip['start_time']}s - {clip['end_time']}s ({duration:.1f}s)")
-                          print(f"   ❤️  Emosi: {clip.get('emotion', 'N/A')}")
-                          print()
-
-                      print(f"📦 Total {len(selected_clips)} klip ({total_duration:.1f}s)")
-                      print(f"📁 Output di: {OUTDIR.absolute()}")
-
-                      # List files yang berhasil dibuat
-                      output_files = list(OUTDIR.glob("*.mp4"))
-                      if output_files:
-                          print("\n📂 File yang dihasilkan:")
-                          for f in output_files:
-                              size_mb = f.stat().st_size / (1024*1024)
-                              print(f"   • {f.name} ({size_mb:.1f} MB)")
-                  else:
-                      print("⚠️ Tidak ada klip yang dihasilkan")
-
-              except Exception as e:
-                  print(f"❌ ERROR: {str(e)}")
-                  import traceback
-                  traceback.print_exc()
-                  sys.exit(1)
-
-          # === ENTRY POINT ===
-          if __name__ == "__main__":
-              main()
-          EOF
+#!/usr/bin/env python3
+import os, sys, json, time, gc, traceback
+from pathlib import Path
+from typing import List, Dict, Any
+
+WORKDIR = Path("workspace"); WORKDIR.mkdir(exist_ok=True)
+OUTDIR = Path("output"); OUTDIR.mkdir(parents=True, exist_ok=True)
+VIDEO_PATH = WORKDIR / "source.mp4"
+
+CUSTOM_API_KEY = "Kontolondon"
+CUSTOM_BASE_URL = "https://tes-coral.vercel.app/v1/"
+
+VIDEO_URL = os.environ.get("VIDEO_URL")
+NUM_CLIPS = int(os.environ.get("NUM_SHORTS", "5"))
+TEMPERATURE = float(os.environ.get("AI_CREATIVITY", "0.7"))
+
+MIN_DURATION = 10.0
+MAX_DURATION = 90.0
+MERGE_GAP = 4.0
+MAX_ATTEMPTS = 5  # iterative LLM refinement attempts
+
+# ---------- download ----------
+def download_video():
+    import subprocess
+    print("Downloading video...")
+    try:
+        subprocess.run(["yt-dlp", VIDEO_URL, "-o", str(VIDEO_PATH), "--force-overwrites", "--quiet"], check=True, stderr=subprocess.DEVNULL)
+    except subprocess.CalledProcessError:
+        print("yt-dlp failed; falling back to curl...")
+        subprocess.run(["curl", "-L", VIDEO_URL, "-o", str(VIDEO_PATH)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if not VIDEO_PATH.exists() or VIDEO_PATH.stat().st_size < 1000:
+        raise Exception("Failed to download video or file too small.")
+    print("Download OK:", VIDEO_PATH, VIDEO_PATH.stat().st_size)
+
+# ---------- transcribe ----------
+def transcribe_video():
+    print("Transcribing (Whisper medium)...")
+    import whisper
+    model = whisper.load_model("medium")
+    # do not pass language="auto" to avoid unsupported-language errors
+    result = model.transcribe(str(VIDEO_PATH), task="transcribe")
+    segments = result.get("segments", [])
+    print(f"Whisper returned {len(segments)} segments; language={result.get('language','unknown')}")
+    return segments, result
+
+# ---------- helper: compute video duration ----------
+def get_video_duration() -> float:
+    try:
+        from moviepy.editor import VideoFileClip
+        v = VideoFileClip(str(VIDEO_PATH))
+        dur = float(v.duration)
+        v.close()
+        return dur
+    except Exception as e:
+        print("Warning: cannot read video duration via moviepy:", e)
+        return None
+
+# ---------- LLM iterative enforcement ----------
+def validate_clips(clips: List[Dict[str,Any]], video_duration: float) -> List[str]:
+    errors = []
+    if not isinstance(clips, list):
+        errors.append("Top-level 'clips' is not a list.")
+        return errors
+    if len(clips) != NUM_CLIPS:
+        errors.append(f"Number of clips returned ({len(clips)}) != required NUM_CLIPS ({NUM_CLIPS}).")
+    for i, c in enumerate(clips):
+        prefix = f"Clip[{i}]"
+        try:
+            s = float(c.get("start_time", None))
+            e = float(c.get("end_time", None))
+        except Exception:
+            errors.append(f"{prefix}: start_time/end_time not numeric or missing.")
+            continue
+        if s < 0:
+            errors.append(f"{prefix}: start_time < 0.")
+        if e <= s:
+            errors.append(f"{prefix}: end_time <= start_time.")
+        dur = e - s
+        if dur < MIN_DURATION:
+            errors.append(f"{prefix}: duration {dur:.2f}s < MIN_DURATION {MIN_DURATION}s.")
+        if dur > MAX_DURATION:
+            errors.append(f"{prefix}: duration {dur:.2f}s > MAX_DURATION {MAX_DURATION}s.")
+        if video_duration:
+            if s > video_duration or e > video_duration:
+                errors.append(f"{prefix}: times out of video range (video_duration={video_duration}s).")
+    # check overlaps minimal (allow small overlaps)
+    sorted_clips = sorted([ (float(c.get("start_time")), float(c.get("end_time"))) for c in clips if c.get("start_time") is not None ], key=lambda x:x[0]) if clips else []
+    for a,b in zip(sorted_clips, sorted_clips[1:]):
+        if a[1] > b[0] + 0.01:
+            errors.append(f"Overlap detected between {a} and {b}.")
+    return errors
+
+def format_transcript_for_prompt(segments: List[Dict[str,Any]], max_chars=12000) -> str:
+    lines = []
+    for seg in segments[:400]:
+        s = seg.get("start",0)
+        mm = int(s)//60; ss = int(s)%60
+        txt = seg.get("text","").replace("\n"," ").strip()
+        lines.append(f"[{mm:02d}:{ss:02d}] {txt}")
+    joined = "\n".join(lines)
+    if len(joined) > max_chars:
+        return joined[:max_chars]
+    return joined
+
+def llm_invoke_with_retry(prompt_messages):
+    # wrapper to call LLM (LangChain ChatOpenAI invoke)
+    from langchain_openai import ChatOpenAI
+    llm = ChatOpenAI(temperature=TEMPERATURE, model="gpt-4", openai_api_key=CUSTOM_API_KEY, openai_api_base=CUSTOM_BASE_URL, max_tokens=2000)
+    # llm.invoke returns a response object with .content in existing codebase
+    resp = llm.invoke(prompt_messages)
+    return resp.content if hasattr(resp, "content") else resp
+
+def iterative_llm_clip_selection(segments, video_duration):
+    transcript_snippet = format_transcript_for_prompt(segments)
+    # Strict prompt header
+    base_instruction = f"""
+You are a professional short-video editor AI. Return exactly {NUM_CLIPS} clips as JSON only, no commentary, no code fences.
+Each clip object MUST contain:
+- start_time (decimal seconds)
+- end_time (decimal seconds)
+- title (string)
+- viral_reasoning (string)
+- emotion (one of: funny, surprising, informative, emotional, neutral)
+
+Constraints (obligatory):
+- Each clip duration MUST be between {MIN_DURATION} and {MAX_DURATION} seconds (inclusive).
+- start_time >= 0 and end_time <= {video_duration if video_duration else 'VIDEO_DURATION'}.
+- Clips should not overlap (small overlaps <=0.5s tolerated).
+- Use the provided TRANSCRIPT to pick clips with coherent hooks & context. Prefer segments containing a hook in first 3 seconds of the clip.
+- If any returned clips violate constraints, you MUST fix them when asked; do not output anything except corrected JSON.
+- Do NOT ask for clarification; produce the corrected JSON.
+
+Provide output exactly in this form:
+{{
+  "clips": [
+    {{
+      "start_time": 12.3,
+      "end_time": 34.5,
+      "title": "Short title",
+      "viral_reasoning": "Why this will be viral, 1-2 sentences",
+      "emotion": "surprising"
+    }}
+  ]
+}}
+"""
+    # initial detailed prompt including transcript and example
+    example_json = {
+        "clips":[
+            {
+                "start_time": 12.0,
+                "end_time": 28.0,
+                "title": "Example Hook",
+                "viral_reasoning": "Strong surprising hook + payoff",
+                "emotion": "surprising"
+            }
+        ]
+    }
+    prompt_template = base_instruction + "\nTRANSCRIPT:\n" + transcript_snippet + "\n\nReturn json now."
+
+    # Build initial message using ChatPromptTemplate style expected by llm.invoke (older integration)
+    from langchain_core.prompts import ChatPromptTemplate
+    prompt = ChatPromptTemplate.from_template(prompt_template)
+    messages = prompt.format_messages()
+
+    last_errors = None
+    for attempt in range(1, MAX_ATTEMPTS+1):
+        print(f"[LLM ATTEMPT {attempt}/{MAX_ATTEMPTS}] Invoking LLM...")
+        try:
+            content = llm_invoke_with_retry(messages)
+        except Exception as e:
+            print("LLM invoke error:", e)
+            content = ""
+        # strip code fences if any
+        if "```json" in content:
+            content = content.split("```json")[1].split("```")[0].strip()
+        elif "```" in content:
+            content = content.split("```")[1].split("```")[0].strip()
+        # try parse
+        parsed = None
+        try:
+            parsed = json.loads(content)
+        except Exception as e:
+            print("Parse error of LLM output; content head:", (content[:1000] if content else "EMPTY"))
+            parsed = None
+
+        if parsed is None:
+            # ask LLM to reformat strictly; include original content as 'previous'
+            repair_instruction = f"""
+Previous LLM output could not be parsed as valid JSON. Please return ONLY the required JSON object under the constraints previously specified.
+If you included any commentary or markdown, remove it. Use the TRANSCRIPT context and produce exactly {NUM_CLIPS} valid clips.
+Return JSON only.
+"""
+            prompt_repair = base_instruction + "\nTRANSCRIPT:\n" + transcript_snippet + "\n\nPREVIOUS_OUTPUT:\n" + (content or "EMPTY") + "\n\n" + repair_instruction
+            prompt_obj = ChatPromptTemplate.from_template(prompt_repair)
+            messages = prompt_obj.format_messages()
+            last_errors = ["parse_error"]
+            print("Asking LLM to reformat output to strict JSON and obey constraints...")
+            continue
+
+        # validate parsed["clips"]
+        clips_candidate = parsed.get("clips", [])
+        errors = validate_clips(clips_candidate, video_duration)
+        if not errors:
+            print(f"LLM output VALID on attempt {attempt}.")
+            # final acceptance
+            return clips_candidate
+        else:
+            print(f"LLM output INVALID (attempt {attempt}):")
+            for e in errors:
+                print(" -", e)
+            last_errors = errors
+            # prepare repair prompt that includes previous JSON and explicit list of errors to fix
+            error_list_text = "\n".join(f"- {e}" for e in errors)
+            repair_prompt = base_instruction + "\nTRANSCRIPT:\n" + transcript_snippet + "\n\nPREVIOUS_JSON:\n" + json.dumps(parsed, ensure_ascii=False, indent=2) + "\n\nERRORS:\n" + error_list_text + "\n\nTASK: Please FIX the PREVIOUS_JSON so that ALL ERRORS are resolved. Return only the corrected JSON object. Do not add any comments."
+            prompt_obj = ChatPromptTemplate.from_template(repair_prompt)
+            messages = prompt_obj.format_messages()
+            # loop to next attempt
+            continue
+
+    # if we exit loop, LLM failed to produce valid clips
+    print("LLM failed to produce valid clips after maximum attempts.")
+    if last_errors:
+        print("Last errors:", last_errors)
+    # Fail explicitly (no deterministic local fallback since requirement: clips must come from AI)
+    raise Exception("LLM did not produce valid clips after iterative refinement. See logs for details.")
+
+# ---------- cut & save (same safe release) ----------
+def safe_release_clip(clip):
+    try:
+        if hasattr(clip, "close"): clip.close()
+    except Exception: pass
+    try:
+        if hasattr(clip, "reader") and clip.reader is not None: 
+            try: clip.reader.close()
+            except Exception: pass
+    except Exception: pass
+    try:
+        if hasattr(clip, "audio") and clip.audio is not None and hasattr(clip.audio, "reader"):
+            try: clip.audio.reader.close_proc()
+            except Exception: pass
+    except Exception: pass
+
+def cut_and_save(clips_data):
+    print("Cutting and saving", len(clips_data), "clips...")
+    from moviepy.editor import VideoFileClip, CompositeVideoClip, ColorClip
+    source_video = VideoFileClip(str(VIDEO_PATH))
+    for idx, clip in enumerate(clips_data):
+        try:
+            start = float(clip["start_time"]); end = float(clip["end_time"])
+            if end > source_video.duration:
+                end = source_video.duration
+            subclip = source_video.subclip(start, end)
+            # simple convert to vertical 1080x1920 with safe resize
+            def resize_with_fallback(c, width=None, height=None):
+                try:
+                    from moviepy.video.fx.all import resize as moviepy_resize
+                    return moviepy_resize(c, width=width, height=height)
+                except Exception:
+                    from PIL import Image
+                    import numpy as np
+                    def resize_frame(frame):
+                        pil = Image.fromarray(frame)
+                        ow,oh = pil.size
+                        if width and height:
+                            new = (width, height)
+                        elif width:
+                            ratio = width/ow; new = (width, int(oh*ratio))
+                        elif height:
+                            ratio = height/oh; new = (int(ow*ratio), height)
+                        else:
+                            return frame
+                        r = pil.resize(new, Image.Resampling.LANCZOS)
+                        return np.array(r)
+                    return c.fl_image(resize_frame)
+            def convert_to_vertical(c):
+                w,h = c.size; target_w,target_h = 1080,1920
+                scale = target_h / h
+                new_w = int(w * scale)
+                resized = resize_with_fallback(c, width=new_w, height=target_h)
+                if new_w > target_w:
+                    x_center = (new_w - target_w)//2
+                    return resized.crop(x1=x_center, y1=0, x2=x_center+target_w, y2=target_h)
+                else:
+                    background = ColorClip(size=(target_w,target_h), color=(0,0,0), duration=c.duration)
+                    x_pos = (target_w - new_w)//2
+                    return CompositeVideoClip([background, resized.set_position((x_pos,0))])
+            vertical = convert_to_vertical(subclip)
+            fname = f"short_{idx+1:02d}_{clip.get('emotion','neutral')}.mp4"
+            out_path = OUTDIR / fname
+            vertical.write_videofile(str(out_path), codec='libx264', audio_codec='aac', fps=30, preset='fast', audio_bitrate='128k', threads=4, verbose=False, logger=None)
+            # release
+            try: safe_release_clip(vertical); safe_release_clip(subclip)
+            except Exception: pass
+            gc.collect()
+            try: os.sync()
+            except Exception: pass
+            time.sleep(1)
+            # metadata
+            meta = {"filename": fname, "title": clip.get("title",""), "viral_reasoning": clip.get("viral_reasoning",""), "emotion": clip.get("emotion","neutral"), "timing":{"start": start, "end": end, "duration": end-start}, "resolution":"1080x1920"}
+            with open(OUTDIR / f"short_{idx+1:02d}_meta.json","w", encoding="utf-8") as f:
+                json.dump(meta, f, ensure_ascii=False, indent=2)
+            print("Saved", fname)
+        except Exception as e:
+            print("Error cutting clip:", e)
+            traceback.print_exc()
+    try: source_video.close()
+    except Exception: pass
+
+# ---------- main ----------
+def main():
+    print("=== VIRAL SHORTS LLM-ONLY RUN ===")
+    try:
+        download_video()
+        segments, whisper_all = transcribe_video()
+        print(f"Transcription segments: {len(segments)}")
+        video_dur = get_video_duration()
+        print("Video duration:", video_dur)
+        # iterative LLM selection: must produce valid clips by itself
+        clips = iterative_llm_clip_selection(segments, video_dur)
+        print("LLM produced clips:", clips)
+        # cut&save
+        cut_and_save(clips)
+        print("Done. Output at", OUTDIR.absolute())
+    except Exception as e:
+        print("Fatal error:", e)
+        traceback.print_exc()
+        # Fail explicitly so CI shows failure (no deterministic non-LLM fallback)
+        sys.exit(2)
+
+if __name__ == '__main__':
+    main()
+EOF
 
       - name: Run AI Pipeline
         env:
@@ -472,20 +397,49 @@ jobs:
           NUM_SHORTS: ${{ github.event.inputs.num_shorts }}
           AI_CREATIVITY: ${{ github.event.inputs.ai_creativity }}
         run: |
-          # Verifikasi versi dependencies
-          python -c "import PIL; print(f'Pillow version: {PIL.__version__}')"
-          python -c "import moviepy; print(f'MoviePy version: {moviepy.__version__}')"
+          python -c "import PIL; print('Pillow', PIL.__version__)"
+          python -c "import moviepy; print('MoviePy', moviepy.__version__)"
           python ai_editor.py
 
-      - name: Zip Results
+      - name: Zip Results (and test)
+        id: zip_results
         run: |
-          zip -r viral_shorts_pack.zip output/
-          echo "=== File dalam output/ ==="
-          find output/ -type f -name "*.mp4" -o -name "*.json" | sort
+          set -e
+          sync || true
+          sleep 2
+          if [ -d output ] && [ "$(ls -A output)" ]; then
+            zip -r viral_shorts_pack.zip output/
+            echo "Testing ZIP integrity..."
+            if unzip -t viral_shorts_pack.zip >/dev/null 2>&1; then
+              echo "zip_ok=true" >> $GITHUB_OUTPUT
+              echo "ZIP test passed."
+            else
+              echo "zip_ok=false" >> $GITHUB_OUTPUT
+              echo "ZIP test failed. Will upload folder as fallback."
+              rm -f viral_shorts_pack.zip || true
+            fi
+          else
+            echo "zip_ok=false" >> $GITHUB_OUTPUT
+            echo "No output files to zip."
+          fi
 
-      - name: Upload Artifact
+      - name: Upload ZIP artifact (if zip OK)
+        if: steps.zip_results.outputs.zip_ok == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: AI-Custom-Shorts-Results
+          name: AI-Custom-Shorts-ZIP
           path: viral_shorts_pack.zip
           retention-days: 7
+
+      - name: Upload output folder artifact (fallback)
+        if: steps.zip_results.outputs.zip_ok != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: AI-Custom-Shorts-Output
+          path: output/
+          retention-days: 7
+
+      - name: Final listing
+        run: |
+          echo "=== Final output listing ==="
+          ls -l output || true
