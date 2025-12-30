@@ -31,7 +31,7 @@ jobs:
       - name: Install System Libraries
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y ffmpeg libsm6 libxext6 libgl1-mesa-glx
+          sudo apt-get install -y ffmpeg libsm6 libxext6 libgl1
 
       - name: Install Python Dependencies
         run: |
