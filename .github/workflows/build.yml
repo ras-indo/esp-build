@@ -1,407 +1,330 @@
-name: 🚀 AI Shorts Generator - Full Auto
+name: 🧠 Auto-Pilot Viral Shorts (AI Decides Count)
 
 on:
   workflow_dispatch:
     inputs:
       video_url:
-        description: 'URL video (YouTube/MP4)'
+        description: 'URL Video MP4 / YouTube'
         required: true
-        default: 'https://api.vidssave.com/api/contentsite_api/media/download_redirect?request=sgRpmKL3iNBpyIDr4IgGHBXJiSxcf0EYQuGexs_6KdEalT5ycrs3ffyBEZXevrdUBcrNn6iDw8MfLNTFhlNy7biCIOWf4sDWWBA_S3Gc0ACg1ZPIBzwNN6iyUU-0-PuEErnV6vklMuUiHCyNARF0XK'
+        default: 'https://api.vidssave.com/api/contentsite_api/media/download_redirect?request=sgRpmKL3iNBpyIDr4IgGHBXJiSxcf0EYQuGexs_6KdEalT5ycrs3ffYBEZXevrdUBcrNn6iDw8MfLNTFhlNy7biCIOWf4sDWWBA_S3Gc0ACg1ZPIBzwNN6iyUU-0-PuEErnV6vklMuUiHCyNARF0XKYdjAEXIFyrKF3ytFZL3SURwBQ6zqTIxoinSGmbNRzuDj7GLLN2-qE4j55wtrmuN0sRuMHC3v3eqf14UHFW6OQMmpQ5sIwzvVB6Y5OhROhLgjaA0g8XRTd1z8-rT37YaXo2Y1N59CFMiBNLYoMKlQY-ogHXajXJ3IPsDSTl679jtoOgZpQQY4lq8X-k8lRdgZ5x16iwKPU9AC5d20FwHAFwPaA6sqqj6Sulox0JtTHVQT3xcaUUJowztbrK3N1wClY_bp0pTnhFn4ntpiJhobshFeQwTW0cvTh7u-DnwrB6zF3N3uAfdG9YkBFZZfMIps_fqAN_JZe1TE8Xy6dOcm1cAkp4CQA-6VSb2h75I3aACfjLy872k1vGM7UyG_aS1MqWJUICirs_GRhll-ZswtvtiONJHwWROte6JB-8vU4YEOzzqQAnMb6vwwKFoFArv6XjRP9hX__3UF6yn8R7YYtp9bMuc53-ovjN9sdZoX02'
 
 jobs:
-  generate-shorts:
+  ai-editor-auto:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    
     steps:
-      - name: 📥 Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: 🐍 Setup Python
+      - name: Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
-      - name: ⚙️ Install dependencies
+      - name: Install system packages
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
-          
-          pip install --upgrade pip
-          # Menggunakan moviepy versi <2.0 karena script menggunakan sintaks lama (version 1)
-          pip install yt-dlp "moviepy<2.0" openai-whisper
-          pip install pillow numpy openai tiktoken
+          sudo apt-get update -y
+          sudo apt-get install -y ffmpeg libsm6 libxext6 libgl1 unzip
 
-      - name: 🤖 Create AI script
+      - name: Install Python dependencies
         run: |
-          cat > generate_shorts.py << 'EOF'
-          #!/usr/bin/env python3
-          """
-          AI Shorts Generator - Full Auto
-          AI menentukan semuanya: jumlah klip, durasi, kreativitas, dan resolusi
-          """
+          python -m pip install --upgrade pip
+          python -m pip install -q wheel setuptools
+          python -m pip install -q "Pillow==9.5.0"
+          python -m pip install -q yt-dlp openai tiktoken
+          python -m pip install -q numpy==1.24.0
+          python -m pip install -q imageio imageio[ffmpeg]
+          python -m pip install -q "langchain==0.1.16" "langchain-core==0.1.44" "langchain-openai==0.0.8"
+          python -m pip install -q --upgrade openai-whisper
+          python -m pip install -q "moviepy==1.0.3" decorator tqdm proglog
 
-          import os
-          import sys
-          import json
-          import subprocess
-          import random
-          from pathlib import Path
-          from datetime import datetime
+      - name: Create AI Editor Script (Auto-Mode)
+        run: |
+          cat > ai_editor.py << 'EOF'
+#!/usr/bin/env python3
+import os, sys, json, time, gc, traceback
+from pathlib import Path
+from typing import List, Dict, Any
 
-          # ========== CONFIG ==========
-          # Mengambil API KEY dari Environment Variable (GitHub Secrets) agar aman dan jalan
-          API_KEY = os.environ.get("OPENAI_API_KEY", "Kontolondon")
-          API_BASE = "https://tes-coral.vercel.app/v1/"
-          MODEL = "gpt-4"
+WORKDIR = Path("workspace"); WORKDIR.mkdir(exist_ok=True)
+OUTDIR = Path("output"); OUTDIR.mkdir(parents=True, exist_ok=True)
+VIDEO_PATH = WORKDIR / "source.mp4"
 
-          # Setup directories
-          BASE_DIR = Path.cwd()
-          VIDEO_DIR = BASE_DIR / "videos"
-          OUTPUT_DIR = BASE_DIR / "shorts"
-          VIDEO_DIR.mkdir(exist_ok=True)
-          OUTPUT_DIR.mkdir(exist_ok=True)
+# --- CONFIG BAWAAN (HARDCODED) ---
+CUSTOM_API_KEY = "Kontolondon"
+CUSTOM_BASE_URL = "https://tes-coral.vercel.app/v1/"
+VIDEO_URL = os.environ.get("VIDEO_URL")
 
-          # Get video URL from environment
-          VIDEO_URL = os.environ.get("VIDEO_URL", "")
+# AI Settings (Fixed)
+TEMPERATURE = 0.7  # Balanced creativity
+MIN_DURATION = 15.0
+MAX_DURATION = 60.0 # Short format sweet spot
+MAX_ATTEMPTS = 5
 
-          class AIShortsGenerator:
-              def __init__(self):
-                  self.video_path = VIDEO_DIR / "source.mp4"
-                  self.stats = {
-                      "start_time": datetime.now().isoformat(),
-                      "decisions": {},
-                      "results": []
-                  }
-              
-              def log(self, message):
-                  print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}")
-              
-              def download_video(self):
-                  """Download video from URL"""
-                  self.log(f"Downloading video from: {VIDEO_URL[:80]}...")
-                  
-                  # Try yt-dlp first
-                  try:
-                      cmd = [
-                          'yt-dlp', '-f', 'best[height<=720]',
-                          '-o', str(self.video_path),
-                          '--quiet',
-                          VIDEO_URL
-                      ]
-                      subprocess.run(cmd, check=True, capture_output=True)
-                  except:
-                      # Fallback to curl
-                      self.log("yt-dlp failed, trying curl...")
-                      cmd = ['curl', '-L', '-o', str(self.video_path), VIDEO_URL]
-                      subprocess.run(cmd, capture_output=True)
-                  
-                  if self.video_path.exists():
-                      size_mb = self.video_path.stat().st_size / (1024 * 1024)
-                      self.log(f"✓ Video downloaded: {size_mb:.1f} MB")
-                      return True
-                  
-                  self.log("✗ Failed to download video")
-                  return False
-              
-              def get_video_info(self):
-                  """Get basic video information"""
-                  try:
-                      import moviepy.editor as mp
-                      with mp.VideoFileClip(str(self.video_path)) as clip:
-                          return {
-                              "duration": clip.duration,
-                              "width": clip.w,
-                              "height": clip.h,
-                              "fps": clip.fps
-                          }
-                  except Exception as e:
-                      self.log(f"Error getting video info: {e}")
-                      return {"duration": 0, "width": 0, "height": 0}
-              
-              def transcribe_video(self):
-                  """Transcribe video using Whisper"""
-                  self.log("Transcribing audio with Whisper...")
-                  
-                  try:
-                      import whisper
-                      # Gunakan model small/base agar lebih cepat di GitHub Actions (CPU only)
-                      model = whisper.load_model("small") 
-                      result = model.transcribe(str(self.video_path), verbose=False)
-                      
-                      # Format transcript for AI
-                      segments = result.get("segments", [])
-                      transcript_lines = []
-                      
-                      for seg in segments[:100]:  # First 100 segments max
-                          start = seg.get("start", 0)
-                          text = seg.get("text", "").strip()
-                          if text:
-                              mins = int(start) // 60
-                              secs = int(start) % 60
-                              transcript_lines.append(f"[{mins:02d}:{secs:02d}] {text}")
-                      
-                      transcript = "\n".join(transcript_lines)
-                      self.log(f"✓ Transcription complete: {len(segments)} segments")
-                      return transcript
-                      
-                  except Exception as e:
-                      self.log(f"Transcription error: {e}")
-                      return ""
-              
-              def analyze_and_decide(self, video_info, transcript):
-                  """AI analyzes video and makes all decisions"""
-                  self.log("🤖 AI analyzing and making decisions...")
-                  
-                  duration = video_info["duration"]
-                  width, height = video_info["width"], video_info["height"]
-                  
-                  # AI Logic for decisions
-                  decisions = {}
-                  
-                  # 1. Decide number of clips
-                  if duration < 60:
-                      decisions["num_clips"] = 1
-                  elif duration < 180:
-                      decisions["num_clips"] = 2
-                  elif duration < 300:
-                      decisions["num_clips"] = 3
-                  else:
-                      decisions["num_clips"] = min(4, int(duration / 120))
-                  
-                  # 2. Decide creativity
-                  creativity = min(0.9, 0.6 + (duration / 600))
-                  decisions["creativity"] = round(creativity, 2)
-                  
-                  # 3. Decide clip durations
-                  decisions["target_duration"] = 15.0
-                  
-                  # 4. Decide mobile resolution
-                  if width >= 1920 and height >= 1080:
-                      decisions["resolution"] = (1080, 1920)
-                  elif width >= 1280 and height >= 720:
-                      decisions["resolution"] = (720, 1280)
-                  else:
-                      decisions["resolution"] = (540, 960)
-                  
-                  # 5. AI selects clips using GPT
-                  ai_clips = self.ai_select_clips(transcript, duration, decisions)
-                  decisions["selected_clips"] = ai_clips
-                  
-                  self.stats["decisions"] = decisions
-                  
-                  self.log(f"✓ AI decided: {decisions['num_clips']} clips")
-                  self.log(f"✓ Resolution: {decisions['resolution'][0]}x{decisions['resolution'][1]}")
-                  
-                  return decisions
-              
-              def ai_select_clips(self, transcript, duration, decisions):
-                  """Use AI to select the best clips"""
-                  try:
-                      import openai
-                      
-                      openai.api_key = API_KEY
-                      openai.api_base = API_BASE
-                      
-                      prompt = f"""As a viral content expert, analyze this video transcript and select {decisions['num_clips']} clips.
-                      
-          Video duration: {duration:.1f} seconds
-          Target clip length: {decisions['target_duration']} seconds each
+# ---------- download ----------
+def download_video():
+    import subprocess
+    print("Downloading video...")
+    try:
+        subprocess.run(["yt-dlp", VIDEO_URL, "-o", str(VIDEO_PATH), "--force-overwrites", "--quiet"], check=True, stderr=subprocess.DEVNULL)
+    except subprocess.CalledProcessError:
+        print("yt-dlp failed; falling back to curl...")
+        subprocess.run(["curl", "-L", VIDEO_URL, "-o", str(VIDEO_PATH)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if not VIDEO_PATH.exists() or VIDEO_PATH.stat().st_size < 1000:
+        raise Exception("Failed to download video or file too small.")
+    print("Download OK:", VIDEO_PATH, VIDEO_PATH.stat().st_size)
 
-          TRANSCRIPT:
-          {transcript[:3500]}...
+# ---------- transcribe ----------
+def transcribe_video():
+    print("Transcribing (Whisper medium)...")
+    import whisper
+    model = whisper.load_model("medium")
+    result = model.transcribe(str(VIDEO_PATH), task="transcribe")
+    segments = result.get("segments", [])
+    print(f"Whisper returned {len(segments)} segments.")
+    return segments, result
 
-          Return ONLY JSON in this format:
-          {{
-            "clips": [
-              {{
-                "start_time": 123.45,
-                "end_time": 138.45,
-                "title": "Title",
-                "emotion": "funny"
-              }}
-            ]
-          }}"""
-                      
-                      response = openai.ChatCompletion.create(
-                          model=MODEL,
-                          messages=[
-                              {"role": "system", "content": "You are a viral content expert."},
-                              {"role": "user", "content": prompt}
-                          ],
-                          temperature=decisions["creativity"]
-                      )
-                      
-                      content = response.choices[0].message.content
-                      
-                      try:
-                          if "```json" in content:
-                              content = content.split("```json")[1].split("```")[0].strip()
-                          elif "```" in content:
-                              content = content.split("```")[1].split("```")[0].strip()
-                          
-                          data = json.loads(content)
-                          clips = data.get("clips", [])
-                          
-                          validated = []
-                          for clip in clips[:decisions["num_clips"]]:
-                              try:
-                                  start = float(clip.get("start_time", 0))
-                                  end = float(clip.get("end_time", start + 15))
-                                  
-                                  if end <= start: end = start + 15
-                                  if end - start > 45: end = start + 45
-                                  if end > duration: end = duration
-                                  
-                                  clip["start_time"] = start
-                                  clip["end_time"] = end
-                                  clip["duration"] = end - start
-                                  validated.append(clip)
-                              except:
-                                  continue
-                          
-                          self.log(f"✓ AI selected {len(validated)} clips")
-                          return validated
-                          
-                      except Exception as e:
-                          self.log(f"JSON Parse error: {e}")
-                  
-                  except Exception as e:
-                      self.log(f"AI selection failed: {e}")
-                  
-                  return self.fallback_clip_selection(duration, decisions["num_clips"])
-              
-              def fallback_clip_selection(self, duration, num_clips):
-                  clips = []
-                  segment = duration / (num_clips + 1)
-                  for i in range(num_clips):
-                      start = segment * i
-                      clips.append({
-                          "start_time": start,
-                          "end_time": start + 15,
-                          "title": f"Highlight {i+1}",
-                          "emotion": "highlight",
-                          "duration": 15
-                      })
-                  return clips
-              
-              def create_shorts(self, decisions):
-                  self.log("Creating mobile-optimized shorts...")
-                  try:
-                      import moviepy.editor as mp
-                      
-                      # Load video once
-                      source_video = mp.VideoFileClip(str(self.video_path))
-                      
-                      for i, clip_data in enumerate(decisions["selected_clips"]):
-                          try:
-                              start = clip_data["start_time"]
-                              end = clip_data["end_time"]
-                              
-                              subclip = source_video.subclip(start, end)
-                              mobile_clip = self.convert_to_mobile(subclip, decisions["resolution"])
-                              
-                              filename = f"short_{i+1:02d}.mp4"
-                              output_path = OUTPUT_DIR / filename
-                              
-                              mobile_clip.write_videofile(
-                                  str(output_path),
-                                  codec='libx264',
-                                  audio_codec='aac',
-                                  fps=24,
-                                  preset='ultrafast',
-                                  threads=4,
-                                  logger=None
-                              )
-                              
-                              self.stats["results"].append({
-                                  "file": filename,
-                                  "duration": clip_data["duration"]
-                              })
-                              
-                              self.log(f"✓ Created: {filename}")
-                              
-                              mobile_clip.close()
-                              subclip.close() # Close subclips to free memory
-                              
-                          except Exception as e:
-                              self.log(f"Error creating clip {i+1}: {e}")
-                              continue
-                              
-                      source_video.close()
-                      
-                  except Exception as e:
-                      self.log(f"Error in video processing: {e}")
-              
-              def convert_to_mobile(self, clip, target_resolution):
-                  target_width, target_height = target_resolution
-                  
-                  # Simple center crop for speed
-                  if clip.w / clip.h > target_width / target_height:
-                      # Video is wider than target
-                      new_h = target_height
-                      new_w = int(clip.w * (target_height / clip.h))
-                      resized = clip.resize(height=new_h)
-                      return resized.crop(x1=(new_w - target_width)//2, width=target_width)
-                  else:
-                      # Video is taller than target
-                      new_w = target_width
-                      new_h = int(clip.h * (target_width / clip.w))
-                      resized = clip.resize(width=new_w)
-                      return resized.crop(y1=(new_h - target_height)//2, height=target_height)
-              
-              def create_report(self):
-                  report_path = OUTPUT_DIR / "ai_report.json"
-                  with open(report_path, 'w') as f:
-                      json.dump(self.stats, f, indent=2)
-                  self.log("✓ Report created")
-              
-              def run(self):
-                  if not self.download_video(): return False
-                  
-                  video_info = self.get_video_info()
-                  if video_info["duration"] < 10: return False
-                  
-                  transcript = self.transcribe_video()
-                  decisions = self.analyze_and_decide(video_info, transcript)
-                  
-                  self.create_shorts(decisions)
-                  self.create_report()
-                  return True
+# ---------- helper: duration ----------
+def get_video_duration() -> float:
+    try:
+        from moviepy.editor import VideoFileClip
+        v = VideoFileClip(str(VIDEO_PATH))
+        dur = float(v.duration)
+        v.close()
+        return dur
+    except Exception as e:
+        print("Warning: cannot read video duration:", e)
+        return None
 
-          if __name__ == "__main__":
-              generator = AIShortsGenerator()
-              if generator.run():
-                  sys.exit(0)
-              else:
-                  sys.exit(1)
-          EOF
+# ---------- LLM Logic ----------
+def format_transcript_for_prompt(segments: List[Dict[str,Any]], max_chars=14000) -> str:
+    lines = []
+    for seg in segments[:500]: # Limit segments to avoid overflow
+        s = seg.get("start",0)
+        mm = int(s)//60; ss = int(s)%60
+        txt = seg.get("text","").replace("\n"," ").strip()
+        lines.append(f"[{mm:02d}:{ss:02d}] {txt}")
+    joined = "\n".join(lines)
+    return joined[:max_chars]
 
-      - name: ▶️ Run AI Generator
+def validate_clips(clips: List[Dict[str,Any]], video_duration: float) -> List[str]:
+    errors = []
+    if not isinstance(clips, list):
+        return ["Top-level 'clips' is not a list."]
+    
+    # Auto-count logic: Just ensure at least one clip exists
+    if len(clips) == 0:
+        return ["AI returned 0 clips. Must find at least one viral segment."]
+
+    for i, c in enumerate(clips):
+        prefix = f"Clip[{i}]"
+        try:
+            s = float(c.get("start_time", -1))
+            e = float(c.get("end_time", -1))
+        except:
+            errors.append(f"{prefix}: Time format invalid.")
+            continue
+        
+        if s < 0: errors.append(f"{prefix}: Start time negative.")
+        if e <= s: errors.append(f"{prefix}: End time before start.")
+        dur = e - s
+        if dur < MIN_DURATION: errors.append(f"{prefix}: Too short ({dur:.1f}s < {MIN_DURATION}s).")
+        if dur > MAX_DURATION: errors.append(f"{prefix}: Too long ({dur:.1f}s > {MAX_DURATION}s).")
+        
+        if video_duration and e > video_duration:
+            errors.append(f"{prefix}: Ends after video finishes.")
+
+    return errors
+
+def llm_invoke_with_retry(messages):
+    from langchain_openai import ChatOpenAI
+    llm = ChatOpenAI(
+        temperature=TEMPERATURE, 
+        model="gpt-4", 
+        openai_api_key=CUSTOM_API_KEY, 
+        openai_api_base=CUSTOM_BASE_URL, 
+        max_tokens=2500
+    )
+    resp = llm.invoke(messages)
+    return resp.content if hasattr(resp, "content") else resp
+
+def iterative_llm_clip_selection(segments, video_duration):
+    transcript_snippet = format_transcript_for_prompt(segments)
+    
+    # PROMPT BARU: Otonom (AI menentukan jumlah)
+    base_instruction = f"""
+You are an expert viral video editor tailored for TikTok/Reels/Shorts.
+Your task: Analyze the provided TRANSCRIPT and extract the BEST viral segments.
+
+Rules for decision making:
+1. QUANTITY: You decide how many clips to extract based on the quality of the content.
+   - If the video is packed with value, extract up to 6 clips.
+   - If it's slow, extract only the top 1 or 2 best moments.
+   - Minimum 1 clip, Maximum 8 clips.
+2. DURATION: Each clip must be between {MIN_DURATION} and {MAX_DURATION} seconds.
+3. CONTENT: Look for "Hooks" (strong starts), jokes, surprising facts, or emotional moments.
+4. CONTEXT: Ensure the start_time and end_time capture the full sentence/context.
+
+Output format: JSON ONLY. No markdown, no conversation.
+{{
+  "clips": [
+    {{
+      "start_time": 10.5,
+      "end_time": 45.2,
+      "title": "Clickbait Title Here",
+      "viral_reasoning": "Why this specific part will go viral",
+      "emotion": "funny"
+    }}
+  ]
+}}
+"""
+    from langchain_core.prompts import ChatPromptTemplate
+    prompt_template = base_instruction + "\nTRANSCRIPT:\n" + transcript_snippet + "\n\nJSON Output:"
+    prompt = ChatPromptTemplate.from_template(prompt_template)
+    messages = prompt.format_messages()
+
+    for attempt in range(1, MAX_ATTEMPTS+1):
+        print(f"[AI Brain] Thinking attempt {attempt}/{MAX_ATTEMPTS}...")
+        try:
+            content = llm_invoke_with_retry(messages)
+            # Cleanup Markdown
+            if "```json" in content: content = content.split("```json")[1].split("```")[0].strip()
+            elif "```" in content: content = content.split("```")[1].split("```")[0].strip()
+            
+            parsed = json.loads(content)
+            clips_candidate = parsed.get("clips", [])
+            
+            # Validation
+            errors = validate_clips(clips_candidate, video_duration)
+            if not errors:
+                print(f"Success! AI decided to make {len(clips_candidate)} clips.")
+                return clips_candidate
+            
+            print("AI Logic Error:", errors)
+            # Feedback loop
+            error_msg = "\n".join(errors)
+            repair_prompt = base_instruction + f"\n\nPREVIOUS_JSON:\n{content}\n\nERRORS:\n{error_msg}\n\nFix the JSON to match constraints exactly."
+            messages = ChatPromptTemplate.from_template(repair_prompt).format_messages()
+
+        except Exception as e:
+            print("LLM Error:", e)
+            continue
+
+    raise Exception("AI failed to generate valid clips after multiple attempts.")
+
+# ---------- Cut & Resize (Mobile 9:16) ----------
+def safe_release(clip):
+    try: clip.close()
+    except: pass
+
+def cut_and_save(clips_data):
+    print(f"Processing {len(clips_data)} clips for Mobile (9:16)...")
+    from moviepy.editor import VideoFileClip, CompositeVideoClip, ColorClip
+    # Import resize from vfx specifically
+    from moviepy.video.fx.all import resize
+    
+    source = VideoFileClip(str(VIDEO_PATH))
+    
+    for idx, data in enumerate(clips_data):
+        try:
+            start = float(data["start_time"])
+            end = float(data["end_time"])
+            if end > source.duration: end = source.duration
+            
+            # 1. Cut
+            sub = source.subclip(start, end)
+            
+            # 2. Force Mobile Resolution (1080x1920)
+            TARGET_W, TARGET_H = 1080, 1920
+            
+            # Logic: Scale height to 1920, then center crop width
+            # Calculate ratio needed to fill height
+            ratio_h = TARGET_H / sub.h
+            new_h = TARGET_H
+            new_w = int(sub.w * ratio_h)
+            
+            # Resize
+            resized = resize(sub, height=new_h)
+            
+            # Center Crop or Pad
+            if new_w >= TARGET_W:
+                # Crop center
+                x_center = (new_w - TARGET_W) // 2
+                final_clip = resized.crop(x1=x_center, y1=0, x2=x_center+TARGET_W, y2=TARGET_H)
+            else:
+                # Pad black bars (jarang terjadi di video landscape normal, tapi just in case)
+                bg = ColorClip(size=(TARGET_W, TARGET_H), color=(0,0,0), duration=sub.duration)
+                x_pos = (TARGET_W - new_w) // 2
+                final_clip = CompositeVideoClip([bg, resized.set_position((x_pos, 0))])
+
+            # 3. Write
+            fname = f"Viral_Auto_{idx+1}_{data.get('emotion','clip')}.mp4"
+            out_path = OUTDIR / fname
+            
+            final_clip.write_videofile(
+                str(out_path), 
+                codec='libx264', 
+                audio_codec='aac', 
+                fps=30, 
+                preset='fast', 
+                audio_bitrate='128k', 
+                threads=4,
+                logger=None
+            )
+            
+            # Metadata
+            meta = data.copy()
+            meta["filename"] = fname
+            with open(OUTDIR / f"Viral_Auto_{idx+1}.json", "w") as f:
+                json.dump(meta, f, indent=2)
+                
+            print(f"Saved: {fname}")
+            safe_release(final_clip)
+            safe_release(sub)
+            gc.collect()
+
+        except Exception as e:
+            print(f"Error clip {idx}: {e}")
+            traceback.print_exc()
+
+    source.close()
+
+def main():
+    print("=== AI AUTO-PILOT EDITOR STARTED ===")
+    try:
+        download_video()
+        segments, _ = transcribe_video()
+        dur = get_video_duration()
+        
+        # AI decides count and times
+        clips = iterative_llm_clip_selection(segments, dur)
+        
+        # Process output
+        cut_and_save(clips)
+        
+        print(f"Done. Check artifacts.")
+    except Exception as e:
+        print("Fatal:", e)
+        sys.exit(1)
+
+if __name__ == '__main__':
+    main()
+EOF
+
+      - name: Run Auto-Pilot
         env:
           VIDEO_URL: ${{ github.event.inputs.video_url }}
-          # PASTIKAN ANDA MEMASUKKAN KEY DI GITHUB SECRETS!
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }} 
         run: |
-          echo "🚀 Starting AI Shorts Generator..."
-          python generate_shorts.py
-          
-          echo "📦 Listing output:"
-          ls -R shorts/ || echo "No shorts dir"
+          python ai_editor.py
 
-      - name: 📦 Package results
-        if: always()
+      - name: Zip & Upload
         run: |
-          if [ -d "shorts" ]; then
-            zip -r ai_shorts_result.zip shorts/
+          if [ -d output ] && [ "$(ls -A output)" ]; then
+            zip -r viral_shorts_auto.zip output/
           fi
-
-      - name: 📤 Upload artifacts
+      
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
-        if: always()
         with:
-          name: ai-shorts-output
-          path: |
-            shorts/
-            *.zip
-          retention-days: 3
+          name: Auto-Generated-Shorts
+          path: output/
+          retention-days: 5
