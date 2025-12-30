@@ -1,4 +1,4 @@
-name: 🧠 Viral Shorts — AI Brain (MoviePy Edition)
+name: 🧠 Viral Shorts — AI Brain (Fixed Imports)
 
 on:
   workflow_dispatch:
@@ -37,11 +37,12 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -q yt-dlp openai tiktoken
-          python -m pip install -q "langchain>=1.0" "langchain-core>=1.0" "langchain-openai>=1.0"
+          # Install LangChain dengan VERSI TEPAT - pakai versi 0.1.x bukan 1.0
+          python -m pip install -q "langchain==0.1.16" "langchain-core==0.1.44" "langchain-openai==0.0.8"
           python -m pip install -q "openai-whisper>=20231117"
           python -m pip install -q "moviepy>=1.0.3"
 
-      - name: Create AI Editor Script (MoviePy Version)
+      - name: Create AI Editor Script (Fixed Version)
         run: |
           cat > ai_editor.py << 'EOF'
           import os
@@ -51,14 +52,15 @@ jobs:
           import whisper
           from pathlib import Path
           
-          # === IMPORTS LANGCHAIN YANG BENAR ===
+          # === IMPORTS YANG BENAR UNTUK LANGCHAIN 0.1.x ===
+          # Versi 0.1.x menggunakan struktur import ini
           from langchain_openai import ChatOpenAI
           from langchain_core.prompts import ChatPromptTemplate
-          from langchain.output_parsers import ResponseSchema, StructuredOutputParser
+          # ResponseSchema tidak ada di versi 0.1, kita ganti dengan pendekatan lain
           
           # === IMPORTS MOVIEPY ===
           from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip
-          from moviepy.video.fx.all import resize, crop
+          from moviepy.video.fx.all import resize
           
           # === KONFIGURASI CUSTOM ===
           CUSTOM_API_KEY = "Kontolondon"
@@ -105,34 +107,19 @@ jobs:
               )
               return result["segments"]
           
-          # === 3. AI EDITORIAL DECISION ===
+          # === 3. AI EDITORIAL DECISION (DENGAN JSON PARSING MANUAL) ===
           def ai_editorial_decision(segments):
               print("🧠 AI Editor menganalisis konten...")
               
               # Format transkrip dengan timestamp
               transcript_lines = []
-              for seg in segments[:50]:
+              for seg in segments[:50]:  # Batasi jumlah segment untuk efisiensi
                   start_min = int(seg['start']) // 60
                   start_sec = int(seg['start']) % 60
                   text = seg['text'].strip()
                   transcript_lines.append(f"[{start_min:02d}:{start_sec:02d}] {text}")
               
               transcript_text = "\n".join(transcript_lines)
-              
-              # Schema untuk output terstruktur
-              clip_schema = ResponseSchema(
-                  name="clips",
-                  description="""List berisi klip terbaik. Setiap klip harus memiliki:
-                  - start_time: waktu mulai dalam detik (float)
-                  - end_time: waktu akhir dalam detik (float)
-                  - title: judul klip (string)
-                  - viral_reasoning: alasan kenapa klip ini viral (string)
-                  - emotion: emosi dominan (pilih: funny, surprising, informative, emotional, neutral)""",
-                  type="array"
-              )
-              
-              output_parser = StructuredOutputParser.from_response_schemas([clip_schema])
-              format_instructions = output_parser.get_format_instructions()
               
               # Inisialisasi LLM dengan API custom
               llm = ChatOpenAI(
@@ -143,7 +130,7 @@ jobs:
                   max_tokens=2000
               )
               
-              # Prompt template
+              # Prompt template dengan instruksi JSON yang jelas
               prompt_template = """
               Kamu adalah Editor Video Professional untuk konten Shorts/TikTok/Reels.
               
@@ -156,47 +143,74 @@ jobs:
               4. Durasi ideal: 15-60 detik
               5. Hindari bagian intro/outro yang membosankan
               
+              INSTRUKSI OUTPUT:
+              Kamu HARUS mengembalikan output dalam format JSON berikut:
+              {{
+                "clips": [
+                  {{
+                    "start_time": 10.5,
+                    "end_time": 45.2,
+                    "title": "Judul klip 1",
+                    "viral_reasoning": "Alasan kenapa klip ini viral",
+                    "emotion": "funny"
+                  }},
+                  {{
+                    "start_time": 65.0,
+                    "end_time": 110.5,
+                    "title": "Judul klip 2",
+                    "viral_reasoning": "Alasan kenapa klip ini viral",
+                    "emotion": "surprising"
+                  }}
+                ]
+              }}
+              
               INSTRUKSI TEKNIS:
-              - Setiap klip HARUS memiliki start_time dan end_time yang akurat
+              - Setiap klip HARUS memiliki start_time dan end_time yang akurat (dalam detik, angka desimal)
               - Durasi minimal 15 detik, maksimal 90 detik
               - Pastikan tidak ada klip yang tumpang tindih
+              - Untuk "emotion": pilih dari: funny, surprising, informative, emotional, neutral
+              - Jumlah klip: {num_clips}
               
               TRANSCRIPT VIDEO:
               {transcript}
               
-              FORMAT OUTPUT:
-              {format_instructions}
-              
-              Hanya kembalikan output dalam format JSON yang diminta.
+              Hanya kembalikan JSON, tidak ada teks lain.
               """
               
               prompt = ChatPromptTemplate.from_template(prompt_template)
               
               messages = prompt.format_messages(
                   num_clips=NUM_CLIPS,
-                  transcript=transcript_text[:8000],
-                  format_instructions=format_instructions
+                  transcript=transcript_text[:8000]  # Batasi panjang transkrip
               )
               
               try:
                   print("🔄 Memproses dengan AI...")
                   response = llm.invoke(messages)
                   
-                  # Bersihkan response dari markdown code blocks
+                  # Bersihkan response dari markdown code blocks dan whitespace
                   content = response.content.strip()
-                  if content.startswith("```json"):
-                      content = content[7:-3].strip()
-                  elif content.startswith("```"):
-                      content = content[3:-3].strip()
                   
-                  # Parse output
-                  parsed_output = output_parser.parse(content)
-                  clips = parsed_output.get("clips", [])
+                  # Cari JSON dalam response (mungkin diawali dengan ```json atau hanya JSON)
+                  if "```json" in content:
+                      content = content.split("```json")[1].split("```")[0].strip()
+                  elif "```" in content:
+                      content = content.split("```")[1].split("```")[0].strip()
+                  
+                  # Parse JSON
+                  import json as json_module
+                  parsed_data = json_module.loads(content)
+                  clips = parsed_data.get("clips", [])
                   
                   # Validasi klip
                   valid_clips = []
                   for clip in clips:
-                      duration = clip["end_time"] - clip["start_time"]
+                      # Pastikan semua field ada
+                      if not all(key in clip for key in ["start_time", "end_time", "title", "viral_reasoning", "emotion"]):
+                          print(f"⚠️ Klip dibuang: field tidak lengkap")
+                          continue
+                          
+                      duration = float(clip["end_time"]) - float(clip["start_time"])
                       if 15 <= duration <= 90:
                           valid_clips.append(clip)
                       else:
@@ -208,7 +222,7 @@ jobs:
               except Exception as e:
                   print(f"❌ Error dalam AI decision: {str(e)}")
                   if 'response' in locals():
-                      print(f"Raw response: {response.content[:500]}")
+                      print(f"Raw response (200 chars): {response.content[:200]}")
                   return []
           
           # === 4. VIDEO CUTTING DENGAN MOVIEPY ===
@@ -254,55 +268,65 @@ jobs:
                           # Target untuk Shorts: 1080x1920 (9:16)
                           target_w, target_h = 1080, 1920
                           
-                          # Hitung scaling factor
-                          scale_ratio = min(target_w / w, target_h / h)
-                          new_w = int(w * scale_ratio)
-                          new_h = int(h * scale_ratio)
+                          # Hitung scaling factor untuk memenuhi tinggi
+                          scale_factor = target_h / h
+                          new_w = int(w * scale_factor)
+                          new_h = target_h
                           
                           # Resize dengan menjaga aspect ratio
                           resized_clip = resize(clip, width=new_w, height=new_h)
                           
-                          # Buat canvas hitam dengan ukuran target
-                          from moviepy.video.VideoClip import ColorClip
-                          background = ColorClip(
-                              size=(target_w, target_h),
-                              color=(0, 0, 0),
-                              duration=clip.duration
-                          )
-                          
-                          # Posisikan video di tengah canvas
-                          x_center = (target_w - new_w) // 2
-                          y_center = (target_h - new_h) // 2
-                          
-                          # Composite video di atas background
-                          final_clip = CompositeVideoClip([
-                              background,
-                              resized_clip.set_position((x_center, y_center))
-                          ])
-                          
-                          return final_clip
+                          # Jika terlalu lebar, crop tengahnya
+                          if new_w > target_w:
+                              # Crop horizontal dari tengah
+                              x_center = (new_w - target_w) // 2
+                              cropped_clip = resized_clip.crop(x1=x_center, x2=x_center + target_w)
+                              return cropped_clip
+                          else:
+                              # Jika tidak cukup lebar, buat canvas hitam
+                              from moviepy.video.VideoClip import ColorClip
+                              background = ColorClip(
+                                  size=(target_w, target_h),
+                                  color=(0, 0, 0),
+                                  duration=clip.duration
+                              )
+                              
+                              # Posisikan video di tengah canvas
+                              x_center = (target_w - new_w) // 2
+                              
+                              # Composite video di atas background
+                              final_clip = CompositeVideoClip([
+                                  background,
+                                  resized_clip.set_position((x_center, 0))
+                              ])
+                              
+                              return final_clip
                       
                       # Konversi ke vertikal
                       vertical_clip = convert_to_vertical(subclip)
                       
                       # Tambahkan judul sebagai teks (opsional)
                       title = clip.get("title", f"Klip {idx+1}")
-                      if len(title) < 50:  # Hanya tambahkan jika judul tidak terlalu panjang
+                      if len(title) < 50 and duration > 3:  # Hanya tambahkan jika judul tidak terlalu panjang
                           try:
+                              # Teks hanya muncul di 3 detik pertama
                               txt_clip = TextClip(
                                   title,
                                   fontsize=40,
                                   color='white',
                                   font='Arial-Bold',
                                   stroke_color='black',
-                                  stroke_width=2
-                              ).set_position(('center', 100)).set_duration(3)
+                                  stroke_width=2,
+                                  method='caption',
+                                  size=(1000, 100)
+                              ).set_position(('center', 100)).set_duration(min(3, duration))
                               
                               final_clip = CompositeVideoClip([
                                   vertical_clip,
                                   txt_clip
                               ])
-                          except:
+                          except Exception as e:
+                              print(f"⚠️ Gagal tambah teks: {e}")
                               final_clip = vertical_clip
                       else:
                           final_clip = vertical_clip
@@ -317,7 +341,8 @@ jobs:
                           audio_bitrate='128k',
                           temp_audiofile=str(WORKDIR / f'temp_audio_{idx}.m4a'),
                           remove_temp=True,
-                          logger=None
+                          logger=None,
+                          threads=4
                       )
                       
                       # Tutup clip untuk menghemat memory
@@ -350,7 +375,7 @@ jobs:
           # === 5. MAIN EXECUTION ===
           def main():
               print("=" * 50)
-              print("🧠 VIRAL SHORTS - AI BRAIN EDITOR (MoviePy Edition)")
+              print("🧠 VIRAL SHORTS - AI BRAIN EDITOR (Fixed Version)")
               print("=" * 50)
               
               try:
@@ -373,10 +398,10 @@ jobs:
                       print("🎬 RINGKASAN OUTPUT:")
                       total_duration = 0
                       for i, clip in enumerate(selected_clips):
-                          duration = clip["end_time"] - clip["start_time"]
+                          duration = float(clip["end_time"]) - float(clip["start_time"])
                           total_duration += duration
                           print(f"{i+1}. {clip.get('title', 'Tanpa judul')}")
-                          print(f"   ⏱️  {clip['start_time']:.1f}s - {clip['end_time']:.1f}s ({duration:.1f}s)")
+                          print(f"   ⏱️  {clip['start_time']}s - {clip['end_time']}s ({duration:.1f}s)")
                           print(f"   ❤️  Emosi: {clip.get('emotion', 'N/A')}")
                           print()
                       
@@ -405,7 +430,7 @@ jobs:
       - name: Zip Results
         run: |
           zip -r viral_shorts_pack.zip output/
-          ls -la output/
+          ls -lah output/*.mp4 2>/dev/null || echo "No MP4 files found"
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
