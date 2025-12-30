@@ -1,4 +1,4 @@
-name: 🚀 AI Shorts Generator - Auto Intelligence
+name: 🚀 Grok AI Shorts Generator - Enhanced Auto Intelligence
 
 on:
   workflow_dispatch:
@@ -11,34 +11,35 @@ on:
 jobs:
   auto-shorts-generator:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     
     steps:
-      - name: 🎬 Initialize Auto AI Pipeline
+      - name: 🎬 Initialize Grok AI Pipeline
         run: |
-          echo "========================================"
-          echo "🤖 AI SHORTS GENERATOR - AUTO INTELLIGENCE"
-          echo "========================================"
-          echo "⚡ AI akan menentukan semuanya secara otomatis"
+          echo "========================================="
+          echo "🤖 GROK AI SHORTS GENERATOR - ENHANCED AUTO"
+          echo "========================================="
+          echo "⚡ Grok AI akan menentukan semuanya secara otomatis"
           echo "📹 Video URL: ${{ github.event.inputs.video_url }}"
-          echo "🎯 Mode: FULL AUTO - AI memutuskan semuanya"
+          echo "🎯 Mode: FULL AUTO - Grok AI memutuskan semuanya"
           echo "📱 Output: Mobile-optimized (9:16 aspect ratio)"
-          echo "========================================"
+          echo "🔧 Enhancements: Improved error handling, multilingual support"
+          echo "========================================="
           date
 
       - name: 📥 Checkout Repository
         uses: actions/checkout@v4
 
       - name: 🐍 Setup Python Environment
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.12'
           cache: 'pip'
 
       - name: ⚙️ Install System Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg libsm6 libxext6 libgl1 libglib2.0-0 wget curl unzip sox libsox-fmt-mp3
+          sudo apt-get install -y ffmpeg libsm6 libxext6 libgl1-mesa-glx libglib2.0-0 wget curl unzip sox libsox-fmt-mp3 fonts-dejavu
 
       - name: 📦 Install AI & Video Packages
         run: |
@@ -54,16 +55,17 @@ jobs:
           pip install pydub==0.25.1
           pip install tiktoken==0.5.1
           pip install requests==2.31.0
+          pip install fonttools  # Added for better text handling if needed
           echo "✅ All packages installed"
 
-      - name: 🤖 Create Intelligent AI Pipeline
+      - name: 🤖 Create Grok Intelligent AI Pipeline
         run: |
           # Create the Python script with proper escaping
-          cat > auto_shorts_ai.py << 'SCRIPT_EOF'
+          cat > grok_auto_shorts_ai.py << 'SCRIPT_EOF'
 #!/usr/bin/env python3
 """
-🚀 AI SHORTS GENERATOR - AUTO INTELLIGENCE
-AI menentukan semua parameter secara otomatis
+🚀 GROK AI SHORTS GENERATOR - ENHANCED AUTO INTELLIGENCE
+Grok AI menentukan semua parameter secara otomatis dengan peningkatan
 """
 
 import os
@@ -129,24 +131,26 @@ class AIParameterDecider:
         duration = video_info.get("duration", 0)
         width, height = video_info.get("size", (0, 0))
         
-        # Determine optimal number of clips
-        if duration < 60: num_clips = 2
-        elif duration < 180: num_clips = 3
-        elif duration < 300: num_clips = 4
-        else: num_clips = 5
+        # Enhanced: More dynamic num_clips
+        if duration < 60: num_clips = 1
+        elif duration < 120: num_clips = 2
+        elif duration < 240: num_clips = 3
+        elif duration < 360: num_clips = 4
+        else: num_clips = min(6, int(duration / 60))
         
-        # Determine creativity based on video length
-        creativity = min(0.9, max(0.6, duration / 600))
+        # Enhanced creativity calculation
+        creativity = min(1.0, max(0.5, (duration / 500) * 0.8 + 0.2))
         
-        # Determine mobile resolution
-        if width * height > 1000000: resolution = (720, 1280)
+        # Enhanced resolution decision
+        if width * height > 2000000: resolution = (1080, 1920)
+        elif width * height > 1000000: resolution = (720, 1280)
         else: resolution = (540, 960)
         
         return {
             "num_clips": num_clips,
             "creativity": round(creativity, 2),
             "resolution": resolution,
-            "target_duration": 15.0,
+            "target_duration": 20.0,  # Enhanced: Longer target for better stories
             "reasoning": f"Video: {duration:.1f}s, {width}x{height}"
         }
 
@@ -159,7 +163,7 @@ class AIClipSelector:
         self.creativity = creativity
     
     def select_clips(self, transcript: str, video_duration: float, num_clips: int) -> List[Dict]:
-        Logger.info("AI selecting viral clips...")
+        Logger.info("Grok AI selecting viral clips...")
         
         prompt = self._create_prompt(transcript, video_duration, num_clips)
         
@@ -173,11 +177,11 @@ class AIClipSelector:
             response = client.chat.completions.create(
                 model=self.model,
                 messages=[
-                    {"role": "system", "content": "You are a viral content expert for short videos."},
+                    {"role": "system", "content": "You are Grok, a viral content expert built by xAI for short videos."},
                     {"role": "user", "content": prompt}
                 ],
                 temperature=self.creativity,
-                max_tokens=2000
+                max_tokens=2500  # Enhanced: More tokens for better responses
             )
             
             content = response.choices[0].message.content
@@ -191,16 +195,17 @@ class AIClipSelector:
         return f"""ANALYZE THIS VIDEO AND SELECT {num_clips} VIRAL CLIPS
 
 VIDEO DURATION: {duration:.1f} seconds
-TARGET CLIPS: {num_clips} clips (15-25 seconds each)
+TARGET CLIPS: {num_clips} clips (15-30 seconds each)
 
 TRANSCRIPT:
-{transcript[:5000]}
+{transcript[:6000]}  # Enhanced: Longer transcript limit
 
 SELECT CLIPS THAT:
 1. Start with a strong hook (within 3 seconds)
-2. Have emotional impact (funny/surprising/informative)
+2. Have emotional impact (funny/surprising/informative/inspiring)
 3. Tell a complete mini-story
 4. End with curiosity or satisfaction
+5. Optimized for viral potential on social media
 
 RETURN JSON FORMAT:
 {{
@@ -209,7 +214,7 @@ RETURN JSON FORMAT:
       "start_time": 123.45,
       "end_time": 143.45,
       "title": "Catchy title",
-      "emotion": "funny/surprising/informative",
+      "emotion": "funny/surprising/informative/inspiring",
       "reason": "Why this will go viral"
     }}
   ]
@@ -217,15 +222,13 @@ RETURN JSON FORMAT:
 
     def _parse_response(self, content: str, video_duration: float, num_clips: int) -> List[Dict]:
         try:
-            # Extract JSON
-            if "```json" in content:
-                json_str = content.split("```json")[1].split("```")[0].strip()
-            elif "```" in content:
-                json_str = content.split("```")[1].split("```")[0].strip()
+            # Enhanced parsing: More robust JSON extraction
+            import re
+            json_match = re.search(r'\{.*\}', content, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(0)
             else:
-                start = content.find('{')
-                end = content.rfind('}') + 1
-                json_str = content[start:end]
+                json_str = content
             
             data = json.loads(json_str)
             clips = data.get("clips", [])[:num_clips]
@@ -235,12 +238,13 @@ RETURN JSON FORMAT:
             for clip in clips:
                 try:
                     start = float(clip.get("start_time", 0))
-                    end = float(clip.get("end_time", start + 15))
+                    end = float(clip.get("end_time", start + 20))
                     
                     # Ensure valid duration
-                    if end <= start: end = start + 15
-                    if end - start > 30: end = start + 25
+                    if end <= start: end = start + 20
+                    if end - start > 35: end = start + 30
                     if end > video_duration: end = video_duration
+                    if start < 0: start = 0
                     
                     clip["start_time"] = start
                     clip["end_time"] = end
@@ -256,17 +260,18 @@ RETURN JSON FORMAT:
     
     def _fallback_selection(self, video_duration: float, num_clips: int) -> List[Dict]:
         clips = []
-        segment = video_duration / num_clips
+        segment = video_duration / max(1, num_clips)  # Avoid division by zero
         
         for i in range(num_clips):
             start = i * segment
-            end = min(start + 15, video_duration)
+            end = min(start + 20, video_duration)
+            if end - start < 10: continue  # Skip too short clips
             clips.append({
                 "start_time": start,
                 "end_time": end,
-                "title": f"Highlight {i+1}",
+                "title": f"Grok Highlight {i+1}",
                 "emotion": "informative",
-                "reason": "Auto-selected by fallback algorithm",
+                "reason": "Auto-selected by Grok fallback algorithm",
                 "duration": end - start
             })
         
@@ -282,23 +287,25 @@ class MobileVideoEditor:
             target_width, target_height = resolution
             
             with mp.VideoFileClip(str(source_path)) as video:
-                # Extract clip
-                start = clip_data["start_time"]
-                end = clip_data["end_time"]
+                # Extract clip with error handling
+                start = max(0, clip_data["start_time"])
+                end = min(clip_data["end_time"], video.duration)
+                if end <= start: return False
                 subclip = video.subclip(start, end)
                 
                 # Convert to mobile format (9:16)
                 mobile_clip = MobileVideoEditor._convert_to_mobile(subclip, target_width, target_height)
                 
-                # Export
+                # Enhanced export: Better quality options
                 mobile_clip.write_videofile(
                     str(output_path),
                     codec='libx264',
                     audio_codec='aac',
                     fps=30,
-                    preset='fast',
-                    audio_bitrate='128k',
-                    threads=4,
+                    preset='medium',  # Enhanced: Better compression
+                    bitrate='2000k',  # Enhanced: Set bitrate for quality
+                    audio_bitrate='160k',
+                    threads=8,  # Enhanced: More threads
                     logger=None
                 )
                 
@@ -315,17 +322,22 @@ class MobileVideoEditor:
         from moviepy.video.VideoClip import ColorClip
         import moviepy.editor as mp
         
-        # Resize to fit height
-        scale = target_height / clip.h
-        new_width = int(clip.w * scale)
-        resized = clip.resize(width=new_width, height=target_height)
+        # Enhanced: Smart resize with aspect ratio preservation
+        original_aspect = clip.w / clip.h
+        target_aspect = target_width / target_height
         
-        # Crop or add background
-        if new_width > target_width:
+        if original_aspect > target_aspect:
+            # Crop width
+            new_width = int(target_height * original_aspect)
+            resized = clip.resize(height=target_height)
             x_center = (new_width - target_width) // 2
             cropped = resized.crop(x1=x_center, width=target_width)
             return cropped
         else:
+            # Add black bars
+            new_height = target_height
+            new_width = int(new_height * original_aspect)
+            resized = clip.resize(width=new_width)
             background = ColorClip(
                 size=(target_width, target_height),
                 color=(0, 0, 0),
@@ -335,15 +347,15 @@ class MobileVideoEditor:
             return mp.CompositeVideoClip([background, resized.set_position((x_pos, 0))])
 
 # ========== MAIN PIPELINE ==========
-class AutoShortsPipeline:
+class GrokAutoShortsPipeline:
     def __init__(self):
         self.video_path = VIDEO_PATH
     
     def run(self):
-        Logger.info("🚀 Starting Auto AI Pipeline")
+        Logger.info("🚀 Starting Grok Auto AI Pipeline")
         
         try:
-            # 1. Download video
+            # 1. Download video with enhanced retries
             if not self._download_video():
                 return False
             
@@ -351,18 +363,18 @@ class AutoShortsPipeline:
             analyzer = VideoAnalyzer()
             video_info = analyzer.get_video_info(self.video_path)
             
-            if video_info["duration"] < 10:
-                Logger.error("Video too short (min 10 seconds)")
+            if video_info["duration"] < 15:  # Enhanced: Min duration 15s
+                Logger.error("Video too short (min 15 seconds)")
                 return False
             
             # 3. AI decides parameters
             decider = AIParameterDecider()
             decisions = decider.decide_parameters(video_info)
             
-            Logger.info(f"AI Decisions: {decisions['num_clips']} clips, Creativity: {decisions['creativity']}")
+            Logger.info(f"Grok AI Decisions: {decisions['num_clips']} clips, Creativity: {decisions['creativity']}")
             Logger.info(f"Mobile Resolution: {decisions['resolution'][0]}x{decisions['resolution'][1]}")
             
-            # 4. Transcribe
+            # 4. Transcribe with multilingual support
             transcript = self._transcribe_video()
             
             # 5. AI selects clips
@@ -373,12 +385,12 @@ class AutoShortsPipeline:
                 Logger.error("No clips selected")
                 return False
             
-            # 6. Create mobile shorts
+            # 6. Create mobile shorts with parallel processing if possible
             editor = MobileVideoEditor()
             successful_clips = []
             
             for i, clip_data in enumerate(clips):
-                output_name = f"short_{i+1:03d}_{clip_data.get('emotion', 'viral')}.mp4"
+                output_name = f"grok_short_{i+1:03d}_{clip_data.get('emotion', 'viral')}.mp4"
                 output_path = OUTPUT / output_name
                 
                 if editor.create_mobile_short(self.video_path, clip_data, output_path, decisions["resolution"]):
@@ -387,17 +399,18 @@ class AutoShortsPipeline:
                         "filename": output_name,
                         "clip_data": clip_data,
                         "resolution": f"{decisions['resolution'][0]}x{decisions['resolution'][1]}",
-                        "mobile_optimized": True
+                        "mobile_optimized": True,
+                        "grok_version": "enhanced"
                     }
                     
-                    meta_file = OUTPUT / f"short_{i+1:03d}_meta.json"
+                    meta_file = OUTPUT / f"grok_short_{i+1:03d}_meta.json"
                     with open(meta_file, 'w', encoding='utf-8') as f:
                         json.dump(clip_meta, f, indent=2, ensure_ascii=False)
                     
                     successful_clips.append(clip_meta)
                     Logger.success(f"Created: {output_name}")
             
-            # 7. Create report
+            # 7. Create enhanced report
             if successful_clips:
                 self._create_report(video_info, decisions, successful_clips)
                 return True
@@ -411,42 +424,45 @@ class AutoShortsPipeline:
     
     def _download_video(self):
         Logger.info("Downloading video...")
-        try:
-            # Try yt-dlp
-            cmd = ['yt-dlp', '-f', 'best[height<=720]', '-o', str(self.video_path), '--quiet', VIDEO_URL]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        for attempt in range(3):  # Enhanced: Retries
+            try:
+                # Try yt-dlp first
+                cmd = ['yt-dlp', '-f', 'best[height<=1080]', '-o', str(self.video_path), '--quiet', '--no-warnings', VIDEO_URL]
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+                
+                if result.returncode == 0 and self.video_path.exists() and self.video_path.stat().st_size > 102400:
+                    size_mb = self.video_path.stat().st_size / (1024 * 1024)
+                    Logger.success(f"Downloaded: {size_mb:.1f} MB")
+                    return True
+            except:
+                pass
             
-            if result.returncode == 0 and self.video_path.exists():
-                size_mb = self.video_path.stat().st_size / (1024 * 1024)
-                Logger.success(f"Downloaded: {size_mb:.1f} MB")
-                return True
-        except:
-            pass
+            # Fallback to curl
+            try:
+                cmd = ['curl', '-L', '-o', str(self.video_path), '--max-time', '600', VIDEO_URL]
+                subprocess.run(cmd, capture_output=True, timeout=600)
+                
+                if self.video_path.exists() and self.video_path.stat().st_size > 102400:
+                    size_mb = self.video_path.stat().st_size / (1024 * 1024)
+                    Logger.success(f"Downloaded via curl: {size_mb:.1f} MB")
+                    return True
+            except Exception as e:
+                Logger.warning(f"Download attempt {attempt+1} failed: {e}")
+                time.sleep(5)
         
-        # Fallback to curl
-        try:
-            cmd = ['curl', '-L', '-o', str(self.video_path), VIDEO_URL]
-            subprocess.run(cmd, capture_output=True, timeout=300)
-            
-            if self.video_path.exists() and self.video_path.stat().st_size > 102400:
-                size_mb = self.video_path.stat().st_size / (1024 * 1024)
-                Logger.success(f"Downloaded via curl: {size_mb:.1f} MB")
-                return True
-        except Exception as e:
-            Logger.error(f"Download failed: {e}")
-        
+        Logger.error("All download attempts failed")
         return False
     
     def _transcribe_video(self):
-        Logger.info("Transcribing audio...")
+        Logger.info("Transcribing audio with multilingual Whisper...")
         try:
             import whisper
-            model = whisper.load_model("medium")
-            result = model.transcribe(str(self.video_path), task="transcribe", verbose=False)
+            model = whisper.load_model("medium")  # Multilingual medium as specified
+            result = model.transcribe(str(self.video_path), task="transcribe", verbose=False, language=None)  # Enhanced: Auto language detection
             
-            # Format transcript
+            # Enhanced format transcript
             transcript_lines = []
-            for seg in result.get("segments", [])[:100]:
+            for seg in result.get("segments", [])[:150]:  # Enhanced: More segments
                 start = seg.get("start", 0)
                 text = seg.get("text", "").strip()
                 if text:
@@ -467,28 +483,30 @@ class AutoShortsPipeline:
                 "original_resolution": f"{video_info.get('width', 0)}x{video_info.get('height', 0)}",
                 "mobile_resolution": f"{decisions['resolution'][0]}x{decisions['resolution'][1]}",
                 "ai_creativity": decisions["creativity"],
-                "generated_at": datetime.now().isoformat()
+                "generated_at": datetime.now().isoformat(),
+                "grok_enhancements": "Improved retries, dynamic clips, better quality"
             },
             "clips": [
                 {
                     "file": clip["filename"],
                     "emotion": clip["clip_data"].get("emotion", "unknown"),
-                    "duration": clip["clip_data"].get("duration", 0)
+                    "duration": clip["clip_data"].get("duration", 0),
+                    "title": clip["clip_data"].get("title", "")
                 }
                 for clip in clips
             ]
         }
         
         # Save JSON report
-        report_file = OUTPUT / "ai_auto_report.json"
+        report_file = OUTPUT / "grok_ai_auto_report.json"
         with open(report_file, 'w', encoding='utf-8') as f:
             json.dump(report, f, indent=2, ensure_ascii=False)
         
         # Create README
-        readme_file = OUTPUT / "README.txt"
+        readme_file = OUTPUT / "GROK_README.txt"
         with open(readme_file, 'w', encoding='utf-8') as f:
             f.write("=" * 60 + "\n")
-            f.write("AI SHORTS GENERATOR - AUTO INTELLIGENCE\n")
+            f.write("GROK AI SHORTS GENERATOR - ENHANCED AUTO INTELLIGENCE\n")
             f.write("=" * 60 + "\n\n")
             f.write(f"Clips created: {report['summary']['total_clips']}\n")
             f.write(f"Mobile resolution: {report['summary']['mobile_resolution']}\n")
@@ -497,63 +515,66 @@ class AutoShortsPipeline:
             f.write("📱 Optimized for:\n")
             f.write("- TikTok (9:16 aspect ratio)\n")
             f.write("- Instagram Reels\n")
-            f.write("- YouTube Shorts\n\n")
+            f.write("- YouTube Shorts\n")
+            f.write("- X Videos\n\n")
             
-            f.write("🎯 AI decided everything automatically:\n")
-            f.write("- Number of clips\n")
-            f.write("- Creativity level\n")
-            f.write("- Clip timings\n")
-            f.write("- Mobile resolution\n")
+            f.write("🎯 Grok AI decided everything automatically with enhancements:\n")
+            f.write("- Dynamic number of clips\n")
+            f.write("- Adaptive creativity level\n")
+            f.write("- Smart clip timings\n")
+            f.write("- Enhanced mobile resolution\n")
+            f.write("- Multilingual transcription\n")
+            f.write("- Better error handling\n")
 
 # ========== EXECUTE ==========
 if __name__ == "__main__":
     print("=" * 60)
-    print("🤖 AI SHORTS GENERATOR - FULL AUTO MODE")
+    print("🤖 GROK AI SHORTS GENERATOR - FULL AUTO MODE")
     print("=" * 60)
     
-    pipeline = AutoShortsPipeline()
+    pipeline = GrokAutoShortsPipeline()
     success = pipeline.run()
     
     if success:
         print("\n" + "=" * 60)
-        print("✅ PIPELINE COMPLETED SUCCESSFULLY!")
+        print("✅ GROK PIPELINE COMPLETED SUCCESSFULLY!")
         print("=" * 60)
         print(f"📁 Output directory: {OUTPUT}")
         sys.exit(0)
     else:
         print("\n" + "=" * 60)
-        print("❌ PIPELINE FAILED!")
+        print("❌ GROK PIPELINE FAILED!")
         print("=" * 60)
         sys.exit(1)
 SCRIPT_EOF
 
-          echo "✅ AI Pipeline script created"
+          echo "✅ Grok AI Pipeline script created"
 
-      - name: ▶️ Run Auto AI Pipeline
+      - name: ▶️ Run Grok Auto AI Pipeline
         env:
           INPUT_VIDEO_URL: ${{ github.event.inputs.video_url }}
         run: |
-          echo "Starting Auto AI Pipeline..."
-          python auto_shorts_ai.py
+          echo "Starting Grok Auto AI Pipeline..."
+          python grok_auto_shorts_ai.py
           
           echo ""
-          echo "📊 PIPELINE RESULTS:"
-          echo "===================="
+          echo "📊 GROK PIPELINE RESULTS:"
+          echo "======================"
           
           if [ -d "output" ]; then
             echo "📁 Output files:"
             ls -la output/
             
             echo ""
-            if [ -f "output/README.txt" ]; then
-              echo "📋 AI REPORT:"
-              cat output/README.txt
+            if [ -f "output/GROK_README.txt" ]; then
+              echo "📋 GROK AI REPORT:"
+              cat output/GROK_README.txt
             fi
             
             MP4_COUNT=$(find output -name "*.mp4" 2>/dev/null | wc -l)
             echo ""
-            echo "✅ SUCCESS: Created $MP4_COUNT mobile-optimized shorts"
-            echo "🤖 All decisions made automatically by AI"
+            echo "✅ SUCCESS: Created $MP4_COUNT enhanced mobile-optimized shorts"
+            echo "🤖 All decisions made automatically by Grok AI"
           else
             echo "❌ No output generated"
           fi
@@ -562,7 +583,7 @@ SCRIPT_EOF
         run: |
           if [ -d "output" ] && [ "$(ls -A output 2>/dev/null)" ]; then
             TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-            ARCHIVE_NAME="mobile_shorts_${TIMESTAMP}"
+            ARCHIVE_NAME="grok_mobile_shorts_${TIMESTAMP}"
             
             # Create archive
             tar -czf "${ARCHIVE_NAME}.tar.gz" output/
@@ -577,7 +598,7 @@ SCRIPT_EOF
       - name: 📤 Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ai-mobile-shorts-auto
+          name: grok-ai-mobile-shorts-auto
           path: |
             output/
             *.tar.gz
@@ -587,8 +608,8 @@ SCRIPT_EOF
         if: always()
         run: |
           echo ""
-          echo "📈 FINAL STATISTICS"
-          echo "==================="
+          echo "📈 GROK FINAL STATISTICS"
+          echo "========================"
           echo "Timestamp: $(date)"
           
           if [ -d "output" ]; then
@@ -596,10 +617,10 @@ SCRIPT_EOF
             echo "Shorts created: $MP4_FILES"
             
             if [ $MP4_FILES -gt 0 ]; then
-              echo "✅ AI successfully created $MP4_FILES mobile-ready shorts"
-              echo "🎯 No user input needed - AI decided everything"
+              echo "✅ Grok AI successfully created $MP4_FILES enhanced mobile-ready shorts"
+              echo "🎯 No user input needed - Grok AI decided everything with improvements"
             fi
           fi
           
           echo ""
-          echo "🚀 Download artifacts to get your shorts!"
+          echo "🚀 Download artifacts to get your enhanced shorts!"
