@@ -40,275 +40,257 @@ jobs:
       - name: Create AI Editor Script (Auto-Mode)
         run: |
           cat > ai_editor.py << 'EOF'
-#!/usr/bin/env python3
-import os, sys, json, time, gc, traceback
-from pathlib import Path
-from typing import List, Dict, Any
+          #!/usr/bin/env python3
+          import os, sys, json, time, gc, traceback
+          from pathlib import Path
+          from typing import List, Dict, Any
 
-WORKDIR = Path("workspace"); WORKDIR.mkdir(exist_ok=True)
-OUTDIR = Path("output"); OUTDIR.mkdir(parents=True, exist_ok=True)
-VIDEO_PATH = WORKDIR / "source.mp4"
+          WORKDIR = Path("workspace"); WORKDIR.mkdir(exist_ok=True)
+          OUTDIR = Path("output"); OUTDIR.mkdir(parents=True, exist_ok=True)
+          VIDEO_PATH = WORKDIR / "source.mp4"
 
-# --- CONFIG BAWAAN (HARDCODED) ---
-CUSTOM_API_KEY = "Kontolondon"
-CUSTOM_BASE_URL = "https://tes-coral.vercel.app/v1/"
-VIDEO_URL = os.environ.get("VIDEO_URL")
+          # --- CONFIG BAWAAN (HARDCODED) ---
+          CUSTOM_API_KEY = "Kontolondon"
+          CUSTOM_BASE_URL = "https://tes-coral.vercel.app/v1/"
+          VIDEO_URL = os.environ.get("VIDEO_URL")
 
-# AI Settings (Fixed)
-TEMPERATURE = 0.7  # Balanced creativity
-MIN_DURATION = 15.0
-MAX_DURATION = 60.0 # Short format sweet spot
-MAX_ATTEMPTS = 5
+          # AI Settings (Fixed)
+          TEMPERATURE = 0.7
+          MIN_DURATION = 15.0
+          MAX_DURATION = 60.0
+          MAX_ATTEMPTS = 5
 
-# ---------- download ----------
-def download_video():
-    import subprocess
-    print("Downloading video...")
-    try:
-        subprocess.run(["yt-dlp", VIDEO_URL, "-o", str(VIDEO_PATH), "--force-overwrites", "--quiet"], check=True, stderr=subprocess.DEVNULL)
-    except subprocess.CalledProcessError:
-        print("yt-dlp failed; falling back to curl...")
-        subprocess.run(["curl", "-L", VIDEO_URL, "-o", str(VIDEO_PATH)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    if not VIDEO_PATH.exists() or VIDEO_PATH.stat().st_size < 1000:
-        raise Exception("Failed to download video or file too small.")
-    print("Download OK:", VIDEO_PATH, VIDEO_PATH.stat().st_size)
+          # ---------- download ----------
+          def download_video():
+              import subprocess
+              print("Downloading video...")
+              try:
+                  subprocess.run(["yt-dlp", VIDEO_URL, "-o", str(VIDEO_PATH), "--force-overwrites", "--quiet"], check=True, stderr=subprocess.DEVNULL)
+              except subprocess.CalledProcessError:
+                  print("yt-dlp failed; falling back to curl...")
+                  subprocess.run(["curl", "-L", VIDEO_URL, "-o", str(VIDEO_PATH)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+              if not VIDEO_PATH.exists() or VIDEO_PATH.stat().st_size < 1000:
+                  raise Exception("Failed to download video or file too small.")
+              print("Download OK:", VIDEO_PATH, VIDEO_PATH.stat().st_size)
 
-# ---------- transcribe ----------
-def transcribe_video():
-    print("Transcribing (Whisper medium)...")
-    import whisper
-    model = whisper.load_model("medium")
-    result = model.transcribe(str(VIDEO_PATH), task="transcribe")
-    segments = result.get("segments", [])
-    print(f"Whisper returned {len(segments)} segments.")
-    return segments, result
+          # ---------- transcribe ----------
+          def transcribe_video():
+              print("Transcribing (Whisper medium)...")
+              import whisper
+              model = whisper.load_model("medium")
+              result = model.transcribe(str(VIDEO_PATH), task="transcribe")
+              segments = result.get("segments", [])
+              print(f"Whisper returned {len(segments)} segments.")
+              return segments, result
 
-# ---------- helper: duration ----------
-def get_video_duration() -> float:
-    try:
-        from moviepy.editor import VideoFileClip
-        v = VideoFileClip(str(VIDEO_PATH))
-        dur = float(v.duration)
-        v.close()
-        return dur
-    except Exception as e:
-        print("Warning: cannot read video duration:", e)
-        return None
+          # ---------- helper: duration ----------
+          def get_video_duration() -> float:
+              try:
+                  from moviepy.editor import VideoFileClip
+                  v = VideoFileClip(str(VIDEO_PATH))
+                  dur = float(v.duration)
+                  v.close()
+                  return dur
+              except Exception as e:
+                  print("Warning: cannot read video duration:", e)
+                  return None
 
-# ---------- LLM Logic ----------
-def format_transcript_for_prompt(segments: List[Dict[str,Any]], max_chars=14000) -> str:
-    lines = []
-    for seg in segments[:500]: # Limit segments to avoid overflow
-        s = seg.get("start",0)
-        mm = int(s)//60; ss = int(s)%60
-        txt = seg.get("text","").replace("\n"," ").strip()
-        lines.append(f"[{mm:02d}:{ss:02d}] {txt}")
-    joined = "\n".join(lines)
-    return joined[:max_chars]
+          # ---------- LLM Logic ----------
+          def format_transcript_for_prompt(segments: List[Dict[str,Any]], max_chars=14000) -> str:
+              lines = []
+              for seg in segments[:500]:
+                  s = seg.get("start",0)
+                  mm = int(s)//60; ss = int(s)%60
+                  txt = seg.get("text","").replace("\n"," ").strip()
+                  lines.append(f"[{mm:02d}:{ss:02d}] {txt}")
+              joined = "\n".join(lines)
+              return joined[:max_chars]
 
-def validate_clips(clips: List[Dict[str,Any]], video_duration: float) -> List[str]:
-    errors = []
-    if not isinstance(clips, list):
-        return ["Top-level 'clips' is not a list."]
-    
-    # Auto-count logic: Just ensure at least one clip exists
-    if len(clips) == 0:
-        return ["AI returned 0 clips. Must find at least one viral segment."]
+          def validate_clips(clips: List[Dict[str,Any]], video_duration: float) -> List[str]:
+              errors = []
+              if not isinstance(clips, list):
+                  return ["Top-level 'clips' is not a list."]
+              
+              if len(clips) == 0:
+                  return ["AI returned 0 clips. Must find at least one viral segment."]
 
-    for i, c in enumerate(clips):
-        prefix = f"Clip[{i}]"
-        try:
-            s = float(c.get("start_time", -1))
-            e = float(c.get("end_time", -1))
-        except:
-            errors.append(f"{prefix}: Time format invalid.")
-            continue
-        
-        if s < 0: errors.append(f"{prefix}: Start time negative.")
-        if e <= s: errors.append(f"{prefix}: End time before start.")
-        dur = e - s
-        if dur < MIN_DURATION: errors.append(f"{prefix}: Too short ({dur:.1f}s < {MIN_DURATION}s).")
-        if dur > MAX_DURATION: errors.append(f"{prefix}: Too long ({dur:.1f}s > {MAX_DURATION}s).")
-        
-        if video_duration and e > video_duration:
-            errors.append(f"{prefix}: Ends after video finishes.")
+              for i, c in enumerate(clips):
+                  prefix = f"Clip[{i}]"
+                  try:
+                      s = float(c.get("start_time", -1))
+                      e = float(c.get("end_time", -1))
+                  except:
+                      errors.append(f"{prefix}: Time format invalid.")
+                      continue
+                  
+                  if s < 0: errors.append(f"{prefix}: Start time negative.")
+                  if e <= s: errors.append(f"{prefix}: End time before start.")
+                  dur = e - s
+                  if dur < MIN_DURATION: errors.append(f"{prefix}: Too short ({dur:.1f}s < {MIN_DURATION}s).")
+                  if dur > MAX_DURATION: errors.append(f"{prefix}: Too long ({dur:.1f}s > {MAX_DURATION}s).")
+                  
+                  if video_duration and e > video_duration:
+                      errors.append(f"{prefix}: Ends after video finishes.")
 
-    return errors
+              return errors
 
-def llm_invoke_with_retry(messages):
-    from langchain_openai import ChatOpenAI
-    llm = ChatOpenAI(
-        temperature=TEMPERATURE, 
-        model="gpt-4", 
-        openai_api_key=CUSTOM_API_KEY, 
-        openai_api_base=CUSTOM_BASE_URL, 
-        max_tokens=2500
-    )
-    resp = llm.invoke(messages)
-    return resp.content if hasattr(resp, "content") else resp
+          def llm_invoke_with_retry(messages):
+              from langchain_openai import ChatOpenAI
+              llm = ChatOpenAI(
+                  temperature=TEMPERATURE, 
+                  model="gpt-4", 
+                  openai_api_key=CUSTOM_API_KEY, 
+                  openai_api_base=CUSTOM_BASE_URL, 
+                  max_tokens=2500
+              )
+              resp = llm.invoke(messages)
+              return resp.content if hasattr(resp, "content") else resp
 
-def iterative_llm_clip_selection(segments, video_duration):
-    transcript_snippet = format_transcript_for_prompt(segments)
-    
-    # PROMPT BARU: Otonom (AI menentukan jumlah)
-    base_instruction = f"""
-You are an expert viral video editor tailored for TikTok/Reels/Shorts.
-Your task: Analyze the provided TRANSCRIPT and extract the BEST viral segments.
+          def iterative_llm_clip_selection(segments, video_duration):
+              transcript_snippet = format_transcript_for_prompt(segments)
+              
+              base_instruction = f"""
+          You are an expert viral video editor tailored for TikTok/Reels/Shorts.
+          Your task: Analyze the provided TRANSCRIPT and extract the BEST viral segments.
 
-Rules for decision making:
-1. QUANTITY: You decide how many clips to extract based on the quality of the content.
-   - If the video is packed with value, extract up to 6 clips.
-   - If it's slow, extract only the top 1 or 2 best moments.
-   - Minimum 1 clip, Maximum 8 clips.
-2. DURATION: Each clip must be between {MIN_DURATION} and {MAX_DURATION} seconds.
-3. CONTENT: Look for "Hooks" (strong starts), jokes, surprising facts, or emotional moments.
-4. CONTEXT: Ensure the start_time and end_time capture the full sentence/context.
+          Rules for decision making:
+          1. QUANTITY: You decide how many clips to extract based on the quality of the content.
+             - If the video is packed with value, extract up to 6 clips.
+             - If it's slow, extract only the top 1 or 2 best moments.
+             - Minimum 1 clip, Maximum 8 clips.
+          2. DURATION: Each clip must be between {MIN_DURATION} and {MAX_DURATION} seconds.
+          3. CONTENT: Look for "Hooks" (strong starts), jokes, surprising facts, or emotional moments.
+          4. CONTEXT: Ensure the start_time and end_time capture the full sentence/context.
 
-Output format: JSON ONLY. No markdown, no conversation.
-{{
-  "clips": [
-    {{
-      "start_time": 10.5,
-      "end_time": 45.2,
-      "title": "Clickbait Title Here",
-      "viral_reasoning": "Why this specific part will go viral",
-      "emotion": "funny"
-    }}
-  ]
-}}
-"""
-    from langchain_core.prompts import ChatPromptTemplate
-    prompt_template = base_instruction + "\nTRANSCRIPT:\n" + transcript_snippet + "\n\nJSON Output:"
-    prompt = ChatPromptTemplate.from_template(prompt_template)
-    messages = prompt.format_messages()
+          Output format: JSON ONLY. No markdown, no conversation.
+          {{
+            "clips": [
+              {{
+                "start_time": 10.5,
+                "end_time": 45.2,
+                "title": "Clickbait Title Here",
+                "viral_reasoning": "Why this specific part will go viral",
+                "emotion": "funny"
+              }}
+            ]
+          }}
+          """
+              from langchain_core.prompts import ChatPromptTemplate
+              prompt_template = base_instruction + "\nTRANSCRIPT:\n" + transcript_snippet + "\n\nJSON Output:"
+              prompt = ChatPromptTemplate.from_template(prompt_template)
+              messages = prompt.format_messages()
 
-    for attempt in range(1, MAX_ATTEMPTS+1):
-        print(f"[AI Brain] Thinking attempt {attempt}/{MAX_ATTEMPTS}...")
-        try:
-            content = llm_invoke_with_retry(messages)
-            # Cleanup Markdown
-            if "```json" in content: content = content.split("```json")[1].split("```")[0].strip()
-            elif "```" in content: content = content.split("```")[1].split("```")[0].strip()
-            
-            parsed = json.loads(content)
-            clips_candidate = parsed.get("clips", [])
-            
-            # Validation
-            errors = validate_clips(clips_candidate, video_duration)
-            if not errors:
-                print(f"Success! AI decided to make {len(clips_candidate)} clips.")
-                return clips_candidate
-            
-            print("AI Logic Error:", errors)
-            # Feedback loop
-            error_msg = "\n".join(errors)
-            repair_prompt = base_instruction + f"\n\nPREVIOUS_JSON:\n{content}\n\nERRORS:\n{error_msg}\n\nFix the JSON to match constraints exactly."
-            messages = ChatPromptTemplate.from_template(repair_prompt).format_messages()
+              for attempt in range(1, MAX_ATTEMPTS+1):
+                  print(f"[AI Brain] Thinking attempt {attempt}/{MAX_ATTEMPTS}...")
+                  try:
+                      content = llm_invoke_with_retry(messages)
+                      if "```json" in content: content = content.split("```json")[1].split("```")[0].strip()
+                      elif "```" in content: content = content.split("```")[1].split("```")[0].strip()
+                      
+                      parsed = json.loads(content)
+                      clips_candidate = parsed.get("clips", [])
+                      
+                      errors = validate_clips(clips_candidate, video_duration)
+                      if not errors:
+                          print(f"Success! AI decided to make {len(clips_candidate)} clips.")
+                          return clips_candidate
+                      
+                      print("AI Logic Error:", errors)
+                      error_msg = "\n".join(errors)
+                      repair_prompt = base_instruction + f"\n\nPREVIOUS_JSON:\n{content}\n\nERRORS:\n{error_msg}\n\nFix the JSON to match constraints exactly."
+                      messages = ChatPromptTemplate.from_template(repair_prompt).format_messages()
 
-        except Exception as e:
-            print("LLM Error:", e)
-            continue
+                  except Exception as e:
+                      print("LLM Error:", e)
+                      continue
 
-    raise Exception("AI failed to generate valid clips after multiple attempts.")
+              raise Exception("AI failed to generate valid clips after multiple attempts.")
 
-# ---------- Cut & Resize (Mobile 9:16) ----------
-def safe_release(clip):
-    try: clip.close()
-    except: pass
+          # ---------- Cut & Resize (Mobile 9:16) ----------
+          def safe_release(clip):
+              try: clip.close()
+              except: pass
 
-def cut_and_save(clips_data):
-    print(f"Processing {len(clips_data)} clips for Mobile (9:16)...")
-    from moviepy.editor import VideoFileClip, CompositeVideoClip, ColorClip
-    # Import resize from vfx specifically
-    from moviepy.video.fx.all import resize
-    
-    source = VideoFileClip(str(VIDEO_PATH))
-    
-    for idx, data in enumerate(clips_data):
-        try:
-            start = float(data["start_time"])
-            end = float(data["end_time"])
-            if end > source.duration: end = source.duration
-            
-            # 1. Cut
-            sub = source.subclip(start, end)
-            
-            # 2. Force Mobile Resolution (1080x1920)
-            TARGET_W, TARGET_H = 1080, 1920
-            
-            # Logic: Scale height to 1920, then center crop width
-            # Calculate ratio needed to fill height
-            ratio_h = TARGET_H / sub.h
-            new_h = TARGET_H
-            new_w = int(sub.w * ratio_h)
-            
-            # Resize
-            resized = resize(sub, height=new_h)
-            
-            # Center Crop or Pad
-            if new_w >= TARGET_W:
-                # Crop center
-                x_center = (new_w - TARGET_W) // 2
-                final_clip = resized.crop(x1=x_center, y1=0, x2=x_center+TARGET_W, y2=TARGET_H)
-            else:
-                # Pad black bars (jarang terjadi di video landscape normal, tapi just in case)
-                bg = ColorClip(size=(TARGET_W, TARGET_H), color=(0,0,0), duration=sub.duration)
-                x_pos = (TARGET_W - new_w) // 2
-                final_clip = CompositeVideoClip([bg, resized.set_position((x_pos, 0))])
+          def cut_and_save(clips_data):
+              print(f"Processing {len(clips_data)} clips for Mobile (9:16)...")
+              from moviepy.editor import VideoFileClip, CompositeVideoClip, ColorClip
+              from moviepy.video.fx.all import resize
+              
+              source = VideoFileClip(str(VIDEO_PATH))
+              
+              for idx, data in enumerate(clips_data):
+                  try:
+                      start = float(data["start_time"])
+                      end = float(data["end_time"])
+                      if end > source.duration: end = source.duration
+                      
+                      sub = source.subclip(start, end)
+                      
+                      # Force Mobile Resolution (1080x1920)
+                      TARGET_W, TARGET_H = 1080, 1920
+                      ratio_h = TARGET_H / sub.h
+                      new_h = TARGET_H
+                      new_w = int(sub.w * ratio_h)
+                      
+                      resized = resize(sub, height=new_h)
+                      
+                      if new_w >= TARGET_W:
+                          x_center = (new_w - TARGET_W) // 2
+                          final_clip = resized.crop(x1=x_center, y1=0, x2=x_center+TARGET_W, y2=TARGET_H)
+                      else:
+                          bg = ColorClip(size=(TARGET_W, TARGET_H), color=(0,0,0), duration=sub.duration)
+                          x_pos = (TARGET_W - new_w) // 2
+                          final_clip = CompositeVideoClip([bg, resized.set_position((x_pos, 0))])
 
-            # 3. Write
-            fname = f"Viral_Auto_{idx+1}_{data.get('emotion','clip')}.mp4"
-            out_path = OUTDIR / fname
-            
-            final_clip.write_videofile(
-                str(out_path), 
-                codec='libx264', 
-                audio_codec='aac', 
-                fps=30, 
-                preset='fast', 
-                audio_bitrate='128k', 
-                threads=4,
-                logger=None
-            )
-            
-            # Metadata
-            meta = data.copy()
-            meta["filename"] = fname
-            with open(OUTDIR / f"Viral_Auto_{idx+1}.json", "w") as f:
-                json.dump(meta, f, indent=2)
-                
-            print(f"Saved: {fname}")
-            safe_release(final_clip)
-            safe_release(sub)
-            gc.collect()
+                      fname = f"Viral_Auto_{idx+1}_{data.get('emotion','clip')}.mp4"
+                      out_path = OUTDIR / fname
+                      
+                      final_clip.write_videofile(
+                          str(out_path), 
+                          codec='libx264', 
+                          audio_codec='aac', 
+                          fps=30, 
+                          preset='fast', 
+                          audio_bitrate='128k', 
+                          threads=4,
+                          logger=None
+                      )
+                      
+                      meta = data.copy()
+                      meta["filename"] = fname
+                      with open(OUTDIR / f"Viral_Auto_{idx+1}.json", "w") as f:
+                          json.dump(meta, f, indent=2)
+                          
+                      print(f"Saved: {fname}")
+                      safe_release(final_clip)
+                      safe_release(sub)
+                      gc.collect()
 
-        except Exception as e:
-            print(f"Error clip {idx}: {e}")
-            traceback.print_exc()
+                  except Exception as e:
+                      print(f"Error clip {idx}: {e}")
+                      traceback.print_exc()
 
-    source.close()
+              source.close()
 
-def main():
-    print("=== AI AUTO-PILOT EDITOR STARTED ===")
-    try:
-        download_video()
-        segments, _ = transcribe_video()
-        dur = get_video_duration()
-        
-        # AI decides count and times
-        clips = iterative_llm_clip_selection(segments, dur)
-        
-        # Process output
-        cut_and_save(clips)
-        
-        print(f"Done. Check artifacts.")
-    except Exception as e:
-        print("Fatal:", e)
-        sys.exit(1)
+          def main():
+              print("=== AI AUTO-PILOT EDITOR STARTED ===")
+              try:
+                  download_video()
+                  segments, _ = transcribe_video()
+                  dur = get_video_duration()
+                  
+                  clips = iterative_llm_clip_selection(segments, dur)
+                  
+                  cut_and_save(clips)
+                  
+                  print(f"Done. Check artifacts.")
+              except Exception as e:
+                  print("Fatal:", e)
+                  sys.exit(1)
 
-if __name__ == '__main__':
-    main()
-EOF
+          if __name__ == '__main__':
+              main()
+          EOF
 
       - name: Run Auto-Pilot
         env:
