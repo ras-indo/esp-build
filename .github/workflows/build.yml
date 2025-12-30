@@ -37,21 +37,21 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -q wheel setuptools
-          
+
           # Install Pillow versi 9.5.0 untuk menghindari ANTIALIAS error
           python -m pip install -q "Pillow==9.5.0"
-          
+
           # Dependencies dasar
           python -m pip install -q yt-dlp openai tiktoken
           python -m pip install -q numpy==1.24.0
           python -m pip install -q imageio imageio[ffmpeg]
-          
+
           # LangChain versi stabil
           python -m pip install -q "langchain==0.1.16" "langchain-core==0.1.44" "langchain-openai==0.0.8"
-          
-          # Whisper
-          python -m pip install -q "openai-whisper>=20231117"
-          
+
+          # Upgrade Whisper -> kita gunakan openai-whisper (medium model)
+          python -m pip install -q --upgrade openai-whisper
+
           # MoviePy
           python -m pip install -q "moviepy==1.0.3" decorator tqdm proglog
 
@@ -64,7 +64,7 @@ jobs:
           import sys
           import whisper
           from pathlib import Path
-          
+
           # === IMPORTS LANGCHAIN ===
           try:
               from langchain_openai import ChatOpenAI
@@ -73,7 +73,7 @@ jobs:
           except ImportError as e:
               print(f"❌ Error import LangChain: {e}")
               sys.exit(1)
-          
+
           # === IMPORTS MOVIEPY ===
           try:
               from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip, ColorClip
@@ -82,56 +82,58 @@ jobs:
           except ImportError as e:
               print(f"❌ Error import MoviePy: {e}")
               sys.exit(1)
-          
+
           # === KONFIGURASI ===
           CUSTOM_API_KEY = "Kontolondon"
           CUSTOM_BASE_URL = "https://tes-coral.vercel.app/v1/"
-          
+
           VIDEO_URL = os.environ.get("VIDEO_URL")
           NUM_CLIPS = int(os.environ.get("NUM_SHORTS", 5))
           TEMPERATURE = float(os.environ.get("AI_CREATIVITY", 0.7))
-          
+
           WORKDIR = Path("workspace")
           WORKDIR.mkdir(exist_ok=True)
           OUTDIR = Path("output")
           OUTDIR.mkdir(parents=True, exist_ok=True)
           VIDEO_PATH = WORKDIR / "source.mp4"
-          
+
           # === 1. DOWNLOAD VIDEO ===
           def download_video():
               print("⬇️ Downloading video...")
               try:
                   subprocess.run([
-                      "yt-dlp", VIDEO_URL, 
-                      "-o", str(VIDEO_PATH), 
+                      "yt-dlp", VIDEO_URL,
+                      "-o", str(VIDEO_PATH),
                       "--force-overwrites",
                       "--quiet"
                   ], check=True, stderr=subprocess.DEVNULL)
               except subprocess.CalledProcessError:
                   print("🔄 yt-dlp gagal, mencoba curl...")
-                  subprocess.run(["curl", "-L", VIDEO_URL, "-o", str(VIDEO_PATH)], 
+                  subprocess.run(["curl", "-L", VIDEO_URL, "-o", str(VIDEO_PATH)],
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-              
+
               if VIDEO_PATH.exists() and VIDEO_PATH.stat().st_size > 1000:
                   print(f"✅ Video siap ({VIDEO_PATH.stat().st_size // 1024} KB)")
               else:
                   raise Exception("❌ Gagal download video.")
-          
-          # === 2. WHISPER TRANSCRIPTION ===
+
+          # === 2. WHISPER TRANSCRIPTION (MEDIUM MULTILINGUAL) ===
           def transcribe_video():
-              print("👂 Menggunakan Whisper untuk transkripsi...")
-              model = whisper.load_model("small")
+              print("👂 Menggunakan Whisper (medium) untuk transkripsi...")
+              # Load medium model (multilingual)
+              model = whisper.load_model("medium")
+              # Gunakan language="auto" agar model mendeteksi bahasa secara otomatis (multilingual)
               result = model.transcribe(
                   str(VIDEO_PATH),
-                  language="id",
+                  language="auto",
                   task="transcribe"
               )
               return result["segments"]
-          
+
           # === 3. AI EDITORIAL DECISION ===
           def ai_editorial_decision(segments):
               print("🧠 AI Editor menganalisis konten...")
-              
+
               # Format transkrip
               transcript_lines = []
               for seg in segments[:50]:
@@ -139,9 +141,9 @@ jobs:
                   start_sec = int(seg['start']) % 60
                   text = seg['text'].strip()
                   transcript_lines.append(f"[{start_min:02d}:{start_sec:02d}] {text}")
-              
+
               transcript_text = "\n".join(transcript_lines)
-              
+
               # Inisialisasi LLM
               llm = ChatOpenAI(
                   temperature=TEMPERATURE,
@@ -150,20 +152,20 @@ jobs:
                   openai_api_base=CUSTOM_BASE_URL,
                   max_tokens=2000
               )
-              
+
               # Prompt template
               prompt_template = """
               Kamu adalah Editor Video Professional untuk konten Shorts/TikTok/Reels.
-              
+
               TUGAS: Pilih {num_clips} klip terbaik dari transkrip video berikut.
-              
+
               KRITERIA KLIP VIRAL:
               1. Hook kuat di 3 detik pertama
               2. Cerita yang koheren dan lengkap
               3. Emosi yang kuat (lucu, mengejutkan, informatif, atau mengharukan)
               4. Durasi ideal: 15-60 detik
               5. Hindari bagian intro/outro yang membosankan
-              
+
               OUTPUT FORMAT (JSON):
               {{
                 "clips": [
@@ -176,119 +178,119 @@ jobs:
                   }}
                 ]
               }}
-              
+
               INSTRUKSI:
               - start_time dan end_time dalam detik (angka desimal)
               - Durasi minimal 15 detik, maksimal 90 detik
               - Emotion: funny, surprising, informative, emotional, neutral
               - Jumlah klip: {num_clips}
-              
+
               TRANSCRIPT:
               {transcript}
-              
+
               Hanya kembalikan JSON, tidak ada teks lain.
               """
-              
+
               prompt = ChatPromptTemplate.from_template(prompt_template)
-              
+
               messages = prompt.format_messages(
                   num_clips=NUM_CLIPS,
                   transcript=transcript_text[:8000]
               )
-              
+
               try:
                   print("🔄 Memproses dengan AI...")
                   response = llm.invoke(messages)
                   content = response.content.strip()
-                  
+
                   # Bersihkan response
                   if "```json" in content:
                       content = content.split("```json")[1].split("```")[0].strip()
                   elif "```" in content:
                       content = content.split("```")[1].split("```")[0].strip()
-                  
+
                   # Parse JSON
                   import json as json_module
                   parsed_data = json_module.loads(content)
                   clips = parsed_data.get("clips", [])
-                  
+
                   # Validasi klip
                   valid_clips = []
                   for clip in clips:
                       if not all(key in clip for key in ["start_time", "end_time", "title", "viral_reasoning", "emotion"]):
                           continue
-                          
+
                       try:
                           start = float(clip["start_time"])
                           end = float(clip["end_time"])
                           duration = end - start
-                          
+
                           if 15 <= duration <= 90:
                               valid_clips.append(clip)
                           else:
                               print(f"⚠️ Klip dibuang: durasi {duration:.1f}s")
                       except ValueError:
                           continue
-                  
+
                   print(f"✅ Ditemukan {len(valid_clips)} klip valid")
                   return valid_clips
-                  
+
               except Exception as e:
                   print(f"❌ Error AI: {str(e)}")
                   if 'response' in locals():
                       print(f"Response: {response.content[:200]}")
                   return []
-          
+
           # === 4. VIDEO CUTTING DENGAN MOVIEPY ===
           def cut_and_save(clips_data):
               print("✂️ Memotong video dengan MoviePy...")
-              
+
               if not clips_data:
                   print("⚠️ Tidak ada klip untuk dipotong")
                   return
-              
+
               try:
                   source_video = VideoFileClip(str(VIDEO_PATH))
                   print(f"📹 Video loaded: {source_video.duration:.1f}s, {source_video.size}")
               except Exception as e:
                   print(f"❌ Gagal load video: {e}")
                   return
-              
+
               for idx, clip in enumerate(clips_data):
                   try:
                       start = float(clip["start_time"])
                       end = float(clip["end_time"])
-                      
+
                       # Validasi waktu
                       if start >= end:
                           print(f"⚠️ Klip {idx+1}: start >= end, dilewati")
                           continue
-                          
+
                       if start > source_video.duration:
                           print(f"⚠️ Klip {idx+1}: start melebihi durasi video")
                           continue
-                          
+
                       # Adjust end time jika perlu
                       if end > source_video.duration:
                           end = source_video.duration
-                          
+
                       duration = end - start
-                      
+
                       if duration < 5:
                           print(f"⚠️ Klip {idx+1}: terlalu pendek ({duration:.1f}s)")
                           continue
-                      
+
                       # Nama file
                       emotion = clip.get("emotion", "neutral")
                       filename = f"short_{idx+1:02d}_{emotion}.mp4"
                       out_path = OUTDIR / filename
                       json_path = OUTDIR / f"short_{idx+1:02d}_meta.json"
-                      
+
                       print(f"🔄 Processing klip {idx+1}: {start:.1f}s - {end:.1f}s ({duration:.1f}s)")
-                      
+
                       # Potong video
                       subclip = source_video.subclip(start, end)
-                      
+
                       # Fungsi resize dengan monkey patch untuk ANTIALIAS
                       def resize_with_fallback(clip, width=None, height=None):
                           """Resize function with fallback for ANTIALIAS error"""
@@ -302,14 +304,14 @@ jobs:
                                   # Gunakan resize manual tanpa ANTIALIAS
                                   from PIL import Image
                                   import numpy as np
-                                  
+
                                   def resize_frame(frame):
                                       # Convert numpy array to PIL Image
                                       pil_img = Image.fromarray(frame)
-                                      
+
                                       # Calculate new size
                                       original_width, original_height = pil_img.size
-                                      
+
                                       if width and height:
                                           new_size = (width, height)
                                       elif width:
@@ -320,31 +322,31 @@ jobs:
                                           new_size = (int(original_width * ratio), height)
                                       else:
                                           return frame
-                                      
+
                                       # Resize with LANCZOS (replacement for ANTIALIAS)
                                       resized_img = pil_img.resize(new_size, Image.Resampling.LANCZOS)
-                                      
+
                                       # Convert back to numpy array
                                       return np.array(resized_img)
-                                  
-                                  # Apply resize to each frame
+
+                                  # Apply resize to setiap frame
                                   return clip.fl_image(resize_frame)
                               else:
                                   raise e
-                      
+
                       # Konversi ke vertikal (1080x1920) - SEDERHANA
                       def convert_to_vertical(clip):
                           w, h = clip.size
                           target_w, target_h = 1080, 1920
-                          
+
                           # Calculate scale factor to fit height
                           scale = target_h / h
                           new_w = int(w * scale)
                           new_h = target_h
-                          
+
                           # Resize
                           resized = resize_with_fallback(clip, width=new_w, height=new_h)
-                          
+
                           # Jika terlalu lebar, crop tengah
                           if new_w > target_w:
                               x_center = (new_w - target_w) // 2
@@ -356,17 +358,17 @@ jobs:
                                   color=(0, 0, 0),
                                   duration=clip.duration
                               )
-                              
+
                               x_pos = (target_w - new_w) // 2
                               final = CompositeVideoClip([
                                   background,
                                   resized.set_position((x_pos, 0))
                               ])
                               return final
-                      
+
                       # Konversi ke format vertikal
                       vertical_clip = convert_to_vertical(subclip)
-                      
+
                       # Export video
                       print(f"💾 Saving {filename}...")
                       vertical_clip.write_videofile(
@@ -380,11 +382,11 @@ jobs:
                           logger=None,
                           verbose=False
                       )
-                      
+
                       # Cleanup
                       vertical_clip.close()
                       subclip.close()
-                      
+
                       # Simpan metadata
                       metadata = {
                           "filename": filename,
@@ -394,41 +396,41 @@ jobs:
                           "timing": {"start": start, "end": end, "duration": duration},
                           "resolution": "1080x1920"
                       }
-                      
+
                       with open(json_path, "w", encoding="utf-8") as f:
                           json.dump(metadata, f, indent=2, ensure_ascii=False)
-                      
+
                       print(f"✅ {filename} ({duration:.1f}s)")
-                      
+
                   except Exception as ex:
                       print(f"❌ Error klip {idx+1}: {str(ex)}")
                       import traceback
                       traceback.print_exc()
-              
+
               # Cleanup
               source_video.close()
-          
+
           # === 5. MAIN EXECUTION ===
           def main():
               print("=" * 50)
               print("🧠 VIRAL SHORTS - AI BRAIN EDITOR")
               print("=" * 50)
-              
+
               try:
                   # Langkah 1: Download
                   download_video()
-                  
+
                   # Langkah 2: Transkripsi
                   segments = transcribe_video()
                   print(f"📝 Transkripsi selesai: {len(segments)} segmen")
-                  
+
                   # Langkah 3: Analisis AI
                   selected_clips = ai_editorial_decision(segments)
-                  
+
                   # Langkah 4: Potong video
                   if selected_clips:
                       cut_and_save(selected_clips)
-                      
+
                       # Ringkasan
                       print("\n" + "=" * 50)
                       print("🎬 RINGKASAN OUTPUT:")
@@ -440,10 +442,10 @@ jobs:
                           print(f"   ⏱️  {clip['start_time']}s - {clip['end_time']}s ({duration:.1f}s)")
                           print(f"   ❤️  Emosi: {clip.get('emotion', 'N/A')}")
                           print()
-                      
+
                       print(f"📦 Total {len(selected_clips)} klip ({total_duration:.1f}s)")
                       print(f"📁 Output di: {OUTDIR.absolute()}")
-                      
+
                       # List files yang berhasil dibuat
                       output_files = list(OUTDIR.glob("*.mp4"))
                       if output_files:
@@ -453,13 +455,13 @@ jobs:
                               print(f"   • {f.name} ({size_mb:.1f} MB)")
                   else:
                       print("⚠️ Tidak ada klip yang dihasilkan")
-                      
+
               except Exception as e:
                   print(f"❌ ERROR: {str(e)}")
                   import traceback
                   traceback.print_exc()
                   sys.exit(1)
-          
+
           # === ENTRY POINT ===
           if __name__ == "__main__":
               main()
