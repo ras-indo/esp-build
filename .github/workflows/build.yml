@@ -20,264 +20,581 @@ jobs:
       - name: Create viral_shorts.py
         run: |
           cat > viral_shorts.py <<'PY'
-#!/usr/bin/env python3
-'''
-==============================================
-AI VIRAL SHORTS GENERATOR - UNIVERSAL FLOW
-==============================================
-'''
-import os
-import sys
-import json
-import re
-import subprocess
-import traceback
-import time
-import gc
-import shutil
-from pathlib import Path
-import warnings
-warnings.filterwarnings('ignore')
+          #!/usr/bin/env python3
+          '''
+          ==============================================
+          AI VIRAL SHORTS GENERATOR - UNIVERSAL FLOW
+          ==============================================
+          7-Step Pipeline: Download → Info → Transcription → AI Editor → AI Reasoner → Create Clips → Generate Summary
+          '''
 
-print("Initializing AI Viral Shorts Generator...")
+          import os
+          import sys
+          import json
+          import re
+          import subprocess
+          import traceback
+          import time
+          import gc
+          import shutil
+          from pathlib import Path
+          import warnings
+          warnings.filterwarnings('ignore')
 
-# ==================== CONFIGURATION ====================
-class Config:
-    def __init__(self):
-        # API Config
-        self.OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "Kontolondon")
-        self.OPENAI_BASE_URL = "https://tes-coral.vercel.app/v1/"
-        self.MODEL_NAME = "gpt-4"
+          print("Initializing AI Viral Shorts Generator...")
+          print("Pipeline: 7-Step Universal Processing")
+          print("=" * 60)
 
-        # Video Config
-        self.MOBILE_WIDTH = 1080
-        self.MOBILE_HEIGHT = 1920
-        self.MIN_CLIP_DURATION = 5.0
-        self.MAX_CLIP_DURATION = 60.0
+          # ==================== CONFIGURATION ====================
+          class Config:
+              def __init__(self):
+                  # API Configuration
+                  self.OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "Kontolondon")
+                  self.OPENAI_BASE_URL = "https://tes-coral.vercel.app/v1/"
+                  self.MODEL_NAME = "gpt-4"
 
-        # Paths
-        cwd = Path.cwd()
-        self.WORK_DIR = cwd / "workspace"
-        self.OUTPUT_DIR = cwd / "shorts_output"
+                  # Video Configuration
+                  self.MOBILE_WIDTH = 1080
+                  self.MOBILE_HEIGHT = 1920
+                  self.MIN_CLIP_DURATION = 8.0
+                  self.MAX_CLIP_DURATION = 60.0
+                  self.TARGET_CLIP_COUNT = 5
 
-        # TARGET VIDEO URL (FIXED)
-        self.VIDEO_URL = "https://down-de.vidsyoutube.com/tmp/recycle/1m/content_site/download/9b/2c/8f9e9d2e47d15f075fefcc7d11eb9b2c-84617981.mp4?title=VIDI_BIKIN_ALBUM_BAHANNYA_APA_Video_diambil_terakhir_sblm_Hiatus_-_LOGIC_KAH_-_FRIMAWAN_480p.mp4"
+                  # File Paths (use current working dir)
+                  cwd = Path.cwd()
+                  self.WORK_DIR = cwd / "workspace"
+                  self.OUTPUT_DIR = cwd / "shorts_output"
 
-        # Init Dirs
-        self.WORK_DIR.mkdir(parents=True, exist_ok=True)
-        self.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+                  # Target Video URL (FIXED)
+                  self.VIDEO_URL = "https://down-de.vidsyoutube.com/tmp/recycle/1m/content_site/download/9b/2c/8f9e9d2e47d15f075fefcc7d11eb9b2c-84617981.mp4?title=VIDI_BIKIN_ALBUM_BAHANNYA_APA_Video_diambil_terakhir_sblm_Hiatus_-_LOGIC_KAH_-_FRIMAWAN_480p.mp4"
 
-config = Config()
+                  # Ensure directories exist
+                  self.WORK_DIR.mkdir(parents=True, exist_ok=True)
+                  self.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-# ==================== HELPERS ====================
-def clean_json(text):
-    if not text: return None
-    try:
-        text = text.strip()
-        if "```json" in text: text = text.split("```json", 1)[1].split("```", 1)[0]
-        elif "```" in text: text = text.split("```")[1]
-        return json.loads(text.strip())
-    except:
-        try: return json.loads(re.search(r'\{.*\}', text.replace('\n', ''), re.DOTALL).group())
-        except: return None
+          config = Config()
 
-# ==================== STEPS ====================
-def step1_download():
-    print(f"\n[1/7] DOWNLOADING VIDEO...")
-    dest = config.WORK_DIR / "source_video.mp4"
-    if dest.exists(): dest.unlink()
-    
-    # Method 1: Requests
-    try:
-        import requests
-        print(f"   Downloading via requests: {config.VIDEO_URL[:60]}...")
-        with requests.get(config.VIDEO_URL, stream=True, timeout=120) as r:
-            r.raise_for_status()
-            with open(dest, 'wb') as f:
-                for chunk in r.iter_content(chunk_size=8192): f.write(chunk)
-        if dest.exists() and dest.stat().st_size > 1024:
-            print(f"   ✅ Downloaded: {dest.stat().st_size/1024/1024:.2f} MB")
-            return dest
-    except Exception as e:
-        print(f"   Requests failed: {e}")
+          # ==================== UTILITY FUNCTIONS ====================
+          def clean_json_response(text):
+              '''Extract and clean JSON from text response'''
+              if not text:
+                  return None
 
-    # Method 2: Curl
-    try:
-        print("   Trying curl...")
-        subprocess.run(['curl', '-L', config.VIDEO_URL, '-o', str(dest)], check=True)
-        if dest.exists(): return dest
-    except: pass
-    
-    raise Exception("Failed to download video")
+              text = text.strip()
 
-def step2_info(path):
-    print(f"\n[2/7] GETTING VIDEO INFO...")
-    duration = 0
-    try:
-        from moviepy.editor import VideoFileClip
-        with VideoFileClip(str(path)) as clip: duration = clip.duration
-    except:
-        # Fallback ffmpeg
-        try:
-            res = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(path)], capture_output=True, text=True)
-            duration = float(res.stdout.strip())
-        except: pass
-    
-    print(f"   Duration: {duration:.2f}s")
-    return {"path": str(path), "duration": duration}
+              # Remove markdown code blocks
+              if "```json" in text:
+                  text = text.split("```json", 1)[1].split("```", 1)[0].strip()
+              elif "```" in text:
+                  parts = text.split("```")
+                  if len(parts) >= 2:
+                      text = parts[1].strip()
 
-def step3_transcribe(video_path):
-    print(f"\n[3/7] TRANSCRIBING...")
-    try:
-        import whisper
-        import torch
-        model = whisper.load_model("medium") # Use medium model
-        
-        # Extract audio first for speed
-        audio_path = config.WORK_DIR / "audio.wav"
-        subprocess.run(["ffmpeg", "-y", "-i", str(video_path), "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", str(audio_path)], capture_output=True)
-        
-        result = model.transcribe(str(audio_path), fp16=torch.cuda.is_available())
-        print(f"   Transcribed {len(result['text'])} chars")
-        return result
-    except Exception as e:
-        print(f"   Transcription failed/skipped: {e}")
-        return {"text": "", "segments": []}
+              # Try to parse as JSON
+              try:
+                  return json.loads(text)
+              except json.JSONDecodeError:
+                  # Try to find JSON object
+                  json_pattern = r'\{.*\}'
+                  matches = re.findall(json_pattern, text, re.DOTALL)
 
-def step4_analyze(transcript, duration):
-    print(f"\n[4/7] AI ANALYSIS (Mocking strategy if API fails)...")
-    candidates = []
-    
-    # Try AI Logic
-    try:
-        if config.OPENAI_API_KEY and len(transcript['text']) > 10:
-            from langchain_openai import ChatOpenAI
-            llm = ChatOpenAI(model=config.MODEL_NAME, openai_api_base=config.OPENAI_BASE_URL, api_key=config.OPENAI_API_KEY)
-            prompt = f"Analyze this transcript from a {duration}s video. Find 3 viral clips (15-60s). Return JSON format: {{ 'clips': [ {{ 'start': 10, 'end': 30, 'title': 'Topic' }} ] }}. Transcript: {transcript['text'][:4000]}"
-            res = llm.invoke(prompt)
-            data = clean_json(res.content)
-            if data and 'clips' in data:
-                candidates = data['clips']
-    except Exception as e:
-        print(f"   AI Error: {e}")
+                  for match in matches:
+                      try:
+                          match = match.strip()
+                          match = re.sub(r',\s*}', '}', match)
+                          match = re.sub(r',\s*]', ']', match)
+                          return json.loads(match)
+                      except Exception:
+                          continue
+              return None
 
-    # Fallback Logic (Uniform cuts)
-    if not candidates:
-        print("   Using fallback cutting strategy")
-        count = 3
-        segment_len = min(45, duration / count)
-        for i in range(count):
-            start = 10 + (i * segment_len)
-            if start + segment_len < duration:
-                candidates.append({"start": start, "end": start + segment_len, "title": f"Highlight_Part_{i+1}"})
-    
-    return candidates
+          def get_video_duration(video_path):
+              '''Get video duration using ffprobe or moviepy fallback'''
+              try:
+                  cmd = [
+                      "ffprobe", "-v", "error",
+                      "-show_entries", "format=duration",
+                      "-of", "default=noprint_wrappers=1:nokey=1",
+                      str(video_path)
+                  ]
+                  result = subprocess.run(cmd, capture_output=True, text=True)
+                  if result.returncode == 0 and result.stdout.strip():
+                      duration = float(result.stdout.strip())
+                      if duration > 0:
+                          return duration
+              except Exception:
+                  pass
 
-def step6_create_shorts(video_path, clips):
-    print(f"\n[6/7] CREATING SHORTS...")
-    created_files = []
-    try:
-        from moviepy.editor import VideoFileClip
-        
-        # Load video once
-        video = VideoFileClip(str(video_path))
-        
-        for i, clip_data in enumerate(clips):
-            try:
-                start = float(clip_data.get('start', 0))
-                end = float(clip_data.get('end', 0))
-                title = re.sub(r'[^a-zA-Z0-9]', '_', clip_data.get('title', f'clip_{i}'))
-                
-                # Validation
-                if end <= start: end = start + 15
-                if end > video.duration: end = video.duration
-                if (end - start) < 3: end = start + 10
+              # Fallback using moviepy
+              try:
+                  from moviepy.editor import VideoFileClip
+                  with VideoFileClip(str(video_path)) as clip:
+                      return clip.duration
+              except Exception:
+                  pass
 
-                print(f"   Processing Clip {i+1}: {title} ({start:.1f}-{end:.1f})")
-                
-                # Cut
-                sub = video.subclip(start, end)
-                
-                # Resize logic (Crop to 9:16)
-                w, h = sub.size
-                target_ratio = 9/16
-                current_ratio = w/h
-                
-                if current_ratio > target_ratio:
-                    # Crop width
-                    new_width = int(h * target_ratio)
-                    center_x = w // 2
-                    sub = sub.crop(x1=center_x - new_width//2, width=new_width, height=h)
-                
-                # Resize to target
-                final = sub.resize(height=config.MOBILE_HEIGHT)
-                # Ensure even dimensions for ffmpeg
-                if final.w % 2 != 0: final = final.resize(width=final.w - 1)
-                
-                filename = f"short_{i+1:02d}_{title}.mp4"
-                out_path = config.OUTPUT_DIR / filename
-                
-                final.write_videofile(
-                    str(out_path), 
-                    codec='libx264', 
-                    audio_codec='aac', 
-                    fps=30, 
-                    threads=4, 
-                    preset='fast',
-                    logger=None
-                )
-                
-                created_files.append(filename)
-                
-                # Write Metadata
-                with open(config.OUTPUT_DIR / f"{filename}.json", 'w') as f:
-                    json.dump(clip_data, f, indent=2)
-                    
-            except Exception as e:
-                print(f"   Failed clip {i}: {e}")
-                traceback.print_exc()
-            
-            gc.collect()
-            
-        video.close()
-        
-    except Exception as e:
-        print(f"   Video processing error: {e}")
-        
-    return created_files
+              return None
 
-def step7_zip():
-    print(f"\n[7/7] ZIPPING OUTPUTS...")
-    zip_name = "viral_shorts_package.zip"
-    zip_path = Path.cwd() / zip_name
-    
-    import zipfile
-    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-        # Add shorts
-        for file in config.OUTPUT_DIR.glob("*"):
-            zipf.write(file, arcname=f"shorts/{file.name}")
-        # Add logs/info if exists
-        if (config.WORK_DIR / "transcript.json").exists():
-            zipf.write(config.WORK_DIR / "transcript.json", "transcript.json")
-            
-    print(f"   Zip created: {zip_path} ({zip_path.stat().st_size/1024/1024:.2f} MB)")
-    return zip_path
+          def extract_audio_optimized(video_path, sample_rate=16000):
+              '''Extract optimized audio for transcription'''
+              audio_path = config.WORK_DIR / "audio_optimized.wav"
 
-# ==================== MAIN ====================
-if __name__ == "__main__":
-    try:
-        video_path = step1_download()
-        info = step2_info(video_path)
-        transcript = step3_transcribe(video_path)
-        clips = step4_analyze(transcript, info['duration'])
-        files = step6_create_shorts(video_path, clips)
-        step7_zip()
-        print("\n✅ PIPELINE COMPLETE")
-    except Exception as e:
-        print(f"\n❌ PIPELINE FAILED: {e}")
-        traceback.print_exc()
-        sys.exit(1)
-PY
+              try:
+                  cmd = [
+                      "ffmpeg", "-y", "-i", str(video_path),
+                      "-ac", "1",  # Mono
+                      "-ar", str(sample_rate),  # Sample rate
+                      "-acodec", "pcm_s16le",
+                      str(audio_path)
+                  ]
+                  subprocess.run(cmd, capture_output=True, text=True)
+                  if audio_path.exists() and audio_path.stat().st_size > 0:
+                      return audio_path
+              except Exception as e:
+                  print(f"Audio extraction warning: {e}")
+
+              # If extraction failed, return original video path (whisper can accept video too)
+              return video_path
+
+          # ==================== PIPELINE STEP 1: DOWNLOAD ====================
+          def step1_download_video():
+              '''Step 1: Download video from URL'''
+              print("\n" + "=" * 60)
+              print("STEP 1: DOWNLOADING VIDEO")
+              print("=" * 60)
+
+              video_path = config.WORK_DIR / "source_video.mp4"
+
+              if video_path.exists():
+                  try:
+                      video_path.unlink()
+                  except Exception:
+                      pass
+
+              print(f"Downloading from: {config.VIDEO_URL[:100]}...")
+
+              # Try multiple download methods
+              download_methods = [
+                  (['wget', '-c', config.VIDEO_URL, '-O', str(video_path)], "wget with resume"),
+                  (['curl', '-L', config.VIDEO_URL, '-o', str(video_path)], "curl"),
+                  (None, "python requests")
+              ]
+
+              for cmd, method_name in download_methods:
+                  try:
+                      print(f"  Trying {method_name}...")
+                      if cmd:
+                          subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+                      else:
+                          try:
+                              import requests
+                              with requests.get(config.VIDEO_URL, stream=True, timeout=60) as r:
+                                  r.raise_for_status()
+                                  with open(video_path, 'wb') as f:
+                                      for chunk in r.iter_content(chunk_size=8192):
+                                          if chunk:
+                                              f.write(chunk)
+                          except Exception as e:
+                              print(f"  requests failed: {e}")
+                      if video_path.exists() and video_path.stat().st_size > 1024 * 1024:
+                          size_mb = video_path.stat().st_size / 1024 / 1024
+                          print(f"✅ Download successful: {size_mb:.1f} MB")
+                          return video_path
+                  except subprocess.TimeoutExpired:
+                      print(f"  {method_name} timed out")
+                  except Exception as e:
+                      print(f"  {method_name} failed: {str(e)[:200]}")
+
+              raise Exception("All download methods failed")
+
+          # ==================== PIPELINE STEP 2: GET VIDEO INFO ====================
+          def step2_get_video_info(video_path):
+              '''Step 2: Extract video information'''
+              print("\n" + "=" * 60)
+              print("STEP 2: ANALYZING VIDEO INFORMATION")
+              print("=" * 60)
+
+              video_info = {
+                  "file_path": str(video_path),
+                  "file_size_mb": video_path.stat().st_size / 1024 / 1024 if video_path.exists() else 0,
+                  "duration": None,
+                  "resolution": None
+              }
+
+              # Get duration
+              duration = get_video_duration(video_path)
+              if duration:
+                  video_info["duration"] = duration
+                  print(f"✅ Duration: {duration:.2f} seconds")
+              else:
+                  print("⚠️ Could not determine duration, using fallback methods")
+                  try:
+                      cmd = f"ffmpeg -i '{video_path}' 2>&1 | head -n 50"
+                      result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+                      stderr = result.stderr or result.stdout
+                      print(f"Raw ffmpeg info (truncated):\n{stderr[:1000]}")
+                  except Exception:
+                      pass
+
+              # Get resolution if possible
+              try:
+                  cmd = [
+                      "ffprobe", "-v", "error",
+                      "-select_streams", "v:0",
+                      "-show_entries", "stream=width,height",
+                      "-of", "csv=p=0",
+                      str(video_path)
+                  ]
+                  result = subprocess.run(cmd, capture_output=True, text=True)
+                  if result.returncode == 0 and result.stdout.strip():
+                      parts = result.stdout.strip().split(',')
+                      if len(parts) >= 2:
+                          width, height = map(int, parts[:2])
+                          video_info["resolution"] = f"{width}x{height}"
+                          print(f"✅ Resolution: {width}x{height}")
+              except Exception:
+                  pass
+
+              # Save video info
+              info_path = config.WORK_DIR / "video_info.json"
+              with open(info_path, "w", encoding="utf-8") as f:
+                  json.dump(video_info, f, indent=2, ensure_ascii=False)
+
+              return video_info
+
+          # ==================== PIPELINE STEP 3: TRANSCRIPTION ====================
+          def step3_transcribe_video(video_path):
+              '''Step 3: Transcribe video using Whisper Multilingual Medium'''
+              print("\n" + "=" * 60)
+              print("STEP 3: VIDEO TRANSCRIPTION")
+              print("=" * 60)
+              print("Using Whisper Multilingual Medium model (if installed)...")
+
+              try:
+                  import whisper
+                  import torch
+
+                  device = "cuda" if torch.cuda.is_available() else "cpu"
+                  print(f"Device: {device}")
+
+                  print("Loading Whisper Medium model...")
+                  model = whisper.load_model("medium")
+
+                  print("Extracting and optimizing audio...")
+                  audio_path = extract_audio_optimized(video_path)
+
+                  print("Transcribing...")
+                  result = model.transcribe(
+                      str(audio_path),
+                      fp16=(device == "cuda"),
+                      verbose=False,
+                      task="transcribe",
+                      temperature=0.0,
+                      best_of=5,
+                      beam_size=5
+                  )
+
+                  segments = result.get("segments", [])
+
+                  processed_segments = []
+                  for seg in segments:
+                      processed_segments.append({
+                          "start": seg.get("start", 0),
+                          "end": seg.get("end", 0),
+                          "text": seg.get("text", "").strip(),
+                          "confidence": seg.get("confidence", 0)
+                      })
+
+                  total_text = " ".join([s["text"] for s in processed_segments])
+                  avg_confidence = sum(s["confidence"] for s in processed_segments) / max(len(processed_segments), 1)
+
+                  print(f"✅ Transcription complete!")
+                  print(f"   Segments: {len(processed_segments)}")
+                  print(f"   Total characters: {len(total_text)}")
+                  print(f"   Average confidence: {avg_confidence:.2%}")
+
+                  transcript_data = {
+                      "segments": processed_segments,
+                      "full_text": total_text,
+                      "statistics": {
+                          "segment_count": len(processed_segments),
+                          "total_characters": len(total_text),
+                          "average_confidence": avg_confidence
+                      }
+                  }
+
+                  transcript_path = config.WORK_DIR / "transcript.json"
+                  with open(transcript_path, "w", encoding="utf-8") as f:
+                      json.dump(transcript_data, f, indent=2, ensure_ascii=False)
+
+                  return transcript_data
+
+              except Exception as e:
+                  print(f"Transcription error: {e}")
+                  traceback.print_exc()
+                  return {
+                      "segments": [],
+                      "full_text": "",
+                      "statistics": {"segment_count": 0, "total_characters": 0, "average_confidence": 0}
+                  }
+
+          # ==================== PIPELINE STEP 4: AI EDITOR ====================
+          def step4_ai_editor(transcript_data, video_duration):
+              '''Step 4: AI Editor - Identify potential viral moments'''
+              print("\n" + "=" * 60)
+              print("STEP 4: AI EDITOR ANALYSIS")
+              print("=" * 60)
+
+              try:
+                  from langchain_openai import ChatOpenAI
+
+                  llm = ChatOpenAI(
+                      model=config.MODEL_NAME,
+                      openai_api_base=config.OPENAI_BASE_URL,
+                  )
+
+                  transcript_text = ""
+                  for i, seg in enumerate(transcript_data.get("segments", [])[:50]):
+                      start = seg.get("start", 0)
+                      mins = int(start // 60)
+                      secs = int(start % 60)
+                      text = seg.get("text", "")[:150]
+                      transcript_text += f"[{mins:02d}:{secs:02d}] {text}\n"
+
+                  editor_prompt = f'''VIDEO EDITOR ANALYSIS TASK
+          VIDEO DURATION: {video_duration:.1f} seconds
+          TRANSCRIPT:
+          {transcript_text}
+          YOUR ROLE: Expert Video Editor. Analyze content for viral short-form clips (8-60s).
+          OUTPUT JSON FORMAT:
+          {{
+            "editor_analysis": {{ "content_type": "...", "content_quality_score": 0.8 }},
+            "candidate_moments": [
+              {{ "moment_id": 1, "start_time": 10.0, "end_time": 30.0, "content_description": "...", "emotional_tone": "Funny", "hook_strength": 0.9 }}
+            ]
+          }}
+          Identify 5-8 moments.'''
+
+                  response = llm.invoke(editor_prompt)
+                  content = response.content if hasattr(response, 'content') else str(response)
+                  editor_data = clean_json_response(content)
+
+                  if not editor_data:
+                      return create_fallback_editor_analysis(video_duration)
+
+                  print(f"AI Editor identified {len(editor_data.get('candidate_moments', []))} moments")
+                  
+                  with open(config.WORK_DIR / "editor_analysis.json", "w", encoding="utf-8") as f:
+                      json.dump(editor_data, f, indent=2)
+
+                  return editor_data
+
+              except Exception as e:
+                  print(f"AI Editor error: {e}")
+                  return create_fallback_editor_analysis(video_duration)
+
+          def create_fallback_editor_analysis(video_duration):
+              print("Using fallback editor analysis...")
+              moments = []
+              count = 3
+              step = video_duration / (count + 1)
+              for i in range(count):
+                  start = (i + 1) * step
+                  moments.append({
+                      "moment_id": i + 1,
+                      "start_time": start,
+                      "end_time": start + 20,
+                      "content_description": f"Fallback segment {i+1}",
+                      "emotional_tone": "Neutral",
+                      "hook_strength": 0.5
+                  })
+              return {"editor_analysis": {}, "candidate_moments": moments}
+
+          # ==================== PIPELINE STEP 5: AI REASONER ====================
+          def step5_ai_reasoner(editor_data, transcript_data, video_info):
+              '''Step 5: AI Reasoner - Strategic selection'''
+              print("\n" + "=" * 60)
+              print("STEP 5: AI REASONER")
+              print("=" * 60)
+
+              try:
+                  from langchain_openai import ChatOpenAI
+                  llm = ChatOpenAI(model=config.MODEL_NAME, openai_api_base=config.OPENAI_BASE_URL)
+
+                  moments_str = json.dumps(editor_data.get("candidate_moments", [])[:10])
+                  
+                  reasoner_prompt = f'''VIRAL STRATEGIST TASK
+          Select BEST 3-5 clips from these candidates: {moments_str}
+          OUTPUT JSON:
+          {{
+            "selected_clips": [
+              {{ "clip_id": 1, "start_time": 10.0, "end_time": 30.0, "clip_title": "Viral Title", "optimal_caption": "Caption...", "recommended_hashtags": ["#fyp"] }}
+            ],
+            "strategic_analysis": {{ ... }}
+          }}'''
+
+                  response = llm.invoke(reasoner_prompt)
+                  content = response.content if hasattr(response, 'content') else str(response)
+                  reasoner_data = clean_json_response(content)
+
+                  if not reasoner_data:
+                      return create_fallback_reasoner_data(editor_data)
+
+                  # Validate timing
+                  valid_clips = []
+                  for i, clip in enumerate(reasoner_data.get("selected_clips", [])):
+                      clip["clip_index"] = i + 1
+                      valid_clips.append(clip)
+                  
+                  reasoner_data["selected_clips"] = valid_clips
+                  print(f"AI Reasoner selected {len(valid_clips)} clips")
+                  
+                  with open(config.WORK_DIR / "reasoner_analysis.json", "w", encoding="utf-8") as f:
+                      json.dump(reasoner_data, f, indent=2)
+
+                  return reasoner_data
+
+              except Exception as e:
+                  print(f"AI Reasoner error: {e}")
+                  return create_fallback_reasoner_data(editor_data)
+
+          def create_fallback_reasoner_data(editor_data):
+              print("Using fallback reasoner...")
+              clips = []
+              for i, m in enumerate(editor_data.get("candidate_moments", [])[:3]):
+                  clips.append({
+                      "clip_index": i+1,
+                      "start_time": m["start_time"],
+                      "end_time": m["end_time"],
+                      "clip_title": f"Clip {i+1}",
+                      "optimal_caption": "Watch this!",
+                      "recommended_hashtags": ["#viral"]
+                  })
+              return {"selected_clips": clips}
+
+          # ==================== PIPELINE STEP 6: CREATE CLIPS ====================
+          def step6_create_clips(video_path, reasoner_data):
+              '''Step 6: Create final video clips'''
+              print("\n" + "=" * 60)
+              print("STEP 6: CREATING VIRAL SHORTS")
+              print("=" * 60)
+
+              created_files = []
+              if not reasoner_data.get("selected_clips"): return []
+
+              try:
+                  from moviepy.editor import VideoFileClip, ColorClip, CompositeVideoClip
+
+                  source = VideoFileClip(str(video_path))
+                  
+                  for clip_data in reasoner_data["selected_clips"]:
+                      idx = clip_data["clip_index"]
+                      print(f"Processing clip {idx}...")
+                      
+                      try:
+                          start = float(clip_data.get("start_time", 0))
+                          end = float(clip_data.get("end_time", 0))
+                          
+                          if end - start < 3: end = start + 10
+                          if end > source.duration: end = source.duration
+
+                          clip = source.subclip(start, end)
+                          
+                          # Resize to 9:16
+                          target_ratio = 9/16
+                          w, h = clip.size
+                          if w/h > target_ratio:
+                              new_w = int(h * target_ratio)
+                              center = w // 2
+                              clip = clip.crop(x1=center - new_w//2, width=new_w, height=h)
+                          
+                          clip = clip.resize(height=config.MOBILE_HEIGHT)
+                          if clip.w % 2 != 0: clip = clip.resize(width=clip.w-1)
+
+                          title = re.sub(r'[^\w\s-]', '', clip_data.get("clip_title", "clip")).replace(" ", "_")
+                          filename = f"short_{idx:02d}_{title[:30]}.mp4"
+                          out_path = config.OUTPUT_DIR / filename
+
+                          clip.write_videofile(
+                              str(out_path), codec="libx264", audio_codec="aac", 
+                              fps=30, preset="medium", threads=4, verbose=False, logger=None
+                          )
+                          
+                          # Metadata
+                          with open(config.OUTPUT_DIR / f"{filename}.json", "w") as f:
+                              json.dump(clip_data, f, indent=2)
+                          with open(config.OUTPUT_DIR / f"{filename}_caption.txt", "w") as f:
+                              f.write(f"{clip_data.get('clip_title')}\n\n{clip_data.get('optimal_caption')}")
+                              
+                          created_files.append(filename)
+                          print(f"  Created: {filename}")
+                          
+                      except Exception as e:
+                          print(f"  Failed clip {idx}: {e}")
+                          
+                      gc.collect()
+                  
+                  source.close()
+                  return created_files
+
+              except Exception as e:
+                  print(f"Clip creation error: {e}")
+                  return created_files
+
+          # ==================== PIPELINE STEP 7: GENERATE SUMMARY ====================
+          def step7_generate_summary(video_info, transcript_data, editor_data, reasoner_data, created_files):
+              '''Step 7: Generate complete processing summary'''
+              print("\n" + "=" * 60)
+              print("STEP 7: GENERATING COMPLETE SUMMARY")
+              print("=" * 60)
+
+              summary = {
+                  "project": "AI Viral Shorts Generator",
+                  "date": time.strftime("%Y-%m-%d %H:%M:%S"),
+                  "video_info": video_info,
+                  "created_files": created_files
+              }
+
+              with open(config.OUTPUT_DIR / "complete_summary.json", "w") as f:
+                  json.dump(summary, f, indent=2)
+              
+              with open(config.OUTPUT_DIR / "processing_report.txt", "w") as f:
+                  f.write(f"PROCESSED: {config.VIDEO_URL}\n")
+                  f.write(f"CLIPS CREATED: {len(created_files)}\n")
+                  for file in created_files:
+                      f.write(f"- {file}\n")
+              
+              return summary
+
+          # ==================== MAIN EXECUTION ====================
+          def execute_full_pipeline():
+              print("\nSTARTING PIPELINE...")
+              try:
+                  video_path = step1_download_video()
+                  video_info = step2_get_video_info(video_path)
+                  transcript_data = step3_transcribe_video(video_path)
+                  editor_data = step4_ai_editor(transcript_data, video_info.get("duration", 0))
+                  reasoner_data = step5_ai_reasoner(editor_data, transcript_data, video_info)
+                  created_files = step6_create_clips(video_path, reasoner_data)
+                  step7_generate_summary(video_info, transcript_data, editor_data, reasoner_data, created_files)
+                  
+                  print("\nCREATING ZIP PACKAGE...")
+                  import zipfile
+                  zip_path = Path.cwd() / "viral_shorts_package.zip"
+                  with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+                      for f in config.OUTPUT_DIR.iterdir():
+                          zf.write(f, f"output/{f.name}")
+                  print(f"Zip ready: {zip_path}")
+                  
+                  return True
+              except Exception as e:
+                  print(f"Pipeline Failed: {e}")
+                  traceback.print_exc()
+                  return False
+
+          if __name__ == "__main__":
+              execute_full_pipeline()
+          PY
 
       - name: Make script executable
         run: chmod +x viral_shorts.py
