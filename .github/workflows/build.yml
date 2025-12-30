@@ -1,4 +1,4 @@
-name: 🧠 Viral Shorts — AI Brain (Fixed MoviePy)
+name: 🧠 Viral Shorts — AI Brain (Fixed Pillow)
 
 on:
   workflow_dispatch:
@@ -37,10 +37,14 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -q wheel setuptools
+          
+          # Install Pillow versi 9.5.0 untuk menghindari ANTIALIAS error
+          python -m pip install -q "Pillow==9.5.0"
+          
           # Dependencies dasar
           python -m pip install -q yt-dlp openai tiktoken
           python -m pip install -q numpy==1.24.0
-          python -m pip install -q imageio imageio[ffmpeg] pillow
+          python -m pip install -q imageio imageio[ffmpeg]
           
           # LangChain versi stabil
           python -m pip install -q "langchain==0.1.16" "langchain-core==0.1.44" "langchain-openai==0.0.8"
@@ -48,7 +52,7 @@ jobs:
           # Whisper
           python -m pip install -q "openai-whisper>=20231117"
           
-          # MoviePy dengan semua dependencies
+          # MoviePy
           python -m pip install -q "moviepy==1.0.3" decorator tqdm proglog
 
       - name: Create AI Editor Script
@@ -77,16 +81,7 @@ jobs:
               print("✅ MoviePy imports berhasil")
           except ImportError as e:
               print(f"❌ Error import MoviePy: {e}")
-              print("Trying alternative imports...")
-              try:
-                  from moviepy import VideoFileClip, TextClip, CompositeVideoClip
-                  import moviepy.video.fx.all as vfx
-                  resize = vfx.resize
-                  print("✅ MoviePy alternative imports berhasil")
-              except ImportError as e2:
-                  print(f"❌ MoviePy tidak terinstall: {e2}")
-                  print("Coba install dengan: pip install moviepy")
-                  sys.exit(1)
+              sys.exit(1)
           
           # === KONFIGURASI ===
           CUSTOM_API_KEY = "Kontolondon"
@@ -150,7 +145,7 @@ jobs:
               # Inisialisasi LLM
               llm = ChatOpenAI(
                   temperature=TEMPERATURE,
-                  model="gpt-4",
+                  model="gpt-3.5-turbo",
                   openai_api_key=CUSTOM_API_KEY,
                   openai_api_base=CUSTOM_BASE_URL,
                   max_tokens=2000
@@ -294,24 +289,68 @@ jobs:
                       # Potong video
                       subclip = source_video.subclip(start, end)
                       
-                      # Konversi ke vertikal (1080x1920)
+                      # Fungsi resize dengan monkey patch untuk ANTIALIAS
+                      def resize_with_fallback(clip, width=None, height=None):
+                          """Resize function with fallback for ANTIALIAS error"""
+                          try:
+                              # Coba resize biasa dulu
+                              from moviepy.video.fx.all import resize as moviepy_resize
+                              return moviepy_resize(clip, width=width, height=height)
+                          except AttributeError as e:
+                              if "ANTIALIAS" in str(e):
+                                  print("⚠️ ANTIALIAS error, menggunakan resize manual...")
+                                  # Gunakan resize manual tanpa ANTIALIAS
+                                  from PIL import Image
+                                  import numpy as np
+                                  
+                                  def resize_frame(frame):
+                                      # Convert numpy array to PIL Image
+                                      pil_img = Image.fromarray(frame)
+                                      
+                                      # Calculate new size
+                                      original_width, original_height = pil_img.size
+                                      
+                                      if width and height:
+                                          new_size = (width, height)
+                                      elif width:
+                                          ratio = width / original_width
+                                          new_size = (width, int(original_height * ratio))
+                                      elif height:
+                                          ratio = height / original_height
+                                          new_size = (int(original_width * ratio), height)
+                                      else:
+                                          return frame
+                                      
+                                      # Resize with LANCZOS (replacement for ANTIALIAS)
+                                      resized_img = pil_img.resize(new_size, Image.Resampling.LANCZOS)
+                                      
+                                      # Convert back to numpy array
+                                      return np.array(resized_img)
+                                  
+                                  # Apply resize to each frame
+                                  return clip.fl_image(resize_frame)
+                              else:
+                                  raise e
+                      
+                      # Konversi ke vertikal (1080x1920) - SEDERHANA
                       def convert_to_vertical(clip):
                           w, h = clip.size
                           target_w, target_h = 1080, 1920
                           
-                          # Scale untuk memenuhi tinggi
+                          # Calculate scale factor to fit height
                           scale = target_h / h
                           new_w = int(w * scale)
                           new_h = target_h
                           
-                          resized = resize(clip, width=new_w, height=new_h)
+                          # Resize
+                          resized = resize_with_fallback(clip, width=new_w, height=new_h)
                           
                           # Jika terlalu lebar, crop tengah
                           if new_w > target_w:
                               x_center = (new_w - target_w) // 2
-                              return resized.crop(x1=x_center, x2=x_center + target_w)
+                              return resized.crop(x1=x_center, y1=0, x2=x_center + target_w, y2=target_h)
                           else:
-                              # Tambah background hitam
+                              # Tambah background hitam di samping
                               background = ColorClip(
                                   size=(target_w, target_h),
                                   color=(0, 0, 0),
@@ -325,10 +364,10 @@ jobs:
                               ])
                               return final
                       
-                      # Konversi
+                      # Konversi ke format vertikal
                       vertical_clip = convert_to_vertical(subclip)
                       
-                      # Export
+                      # Export video
                       print(f"💾 Saving {filename}...")
                       vertical_clip.write_videofile(
                           str(out_path),
@@ -338,14 +377,15 @@ jobs:
                           preset='fast',
                           audio_bitrate='128k',
                           threads=4,
-                          logger=None
+                          logger=None,
+                          verbose=False
                       )
                       
                       # Cleanup
                       vertical_clip.close()
                       subclip.close()
                       
-                      # Metadata
+                      # Simpan metadata
                       metadata = {
                           "filename": filename,
                           "title": clip.get("title", f"Klip {idx+1}"),
@@ -403,6 +443,14 @@ jobs:
                       
                       print(f"📦 Total {len(selected_clips)} klip ({total_duration:.1f}s)")
                       print(f"📁 Output di: {OUTDIR.absolute()}")
+                      
+                      # List files yang berhasil dibuat
+                      output_files = list(OUTDIR.glob("*.mp4"))
+                      if output_files:
+                          print("\n📂 File yang dihasilkan:")
+                          for f in output_files:
+                              size_mb = f.stat().st_size / (1024*1024)
+                              print(f"   • {f.name} ({size_mb:.1f} MB)")
                   else:
                       print("⚠️ Tidak ada klip yang dihasilkan")
                       
@@ -423,13 +471,16 @@ jobs:
           NUM_SHORTS: ${{ github.event.inputs.num_shorts }}
           AI_CREATIVITY: ${{ github.event.inputs.ai_creativity }}
         run: |
+          # Verifikasi versi dependencies
+          python -c "import PIL; print(f'Pillow version: {PIL.__version__}')"
           python -c "import moviepy; print(f'MoviePy version: {moviepy.__version__}')"
           python ai_editor.py
 
       - name: Zip Results
         run: |
           zip -r viral_shorts_pack.zip output/
-          ls -la output/ 2>/dev/null || echo "Output folder empty"
+          echo "=== File dalam output/ ==="
+          find output/ -type f -name "*.mp4" -o -name "*.json" | sort
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
