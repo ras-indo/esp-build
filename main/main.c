@@ -8,9 +8,9 @@
 
 /* ================== KONFIGURASI ================== */
 /* 3 GPIO PROBE (tiga kabel ke board target) */
-#define PROBE_A  12
-#define PROBE_B  13
-#define PROBE_C  14
+#define PROBE_A  36
+#define PROBE_B  35
+#define PROBE_C  34
 
 /* RGB LED (3 GPIO biasa, BUKAN WS2812) */
 #define PIN_R     2
