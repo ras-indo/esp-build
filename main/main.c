@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <string.h>
+#include <inttypes.h>          // untuk PRIu32
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_wifi.h"
@@ -50,7 +51,7 @@ void wifi_init(void) {
     ESP_ERROR_CHECK(esp_wifi_start());
 
     // Atur channel (misal channel 1)
-    ESP_ERROR_CHECK(esp_wifi_set_channel(5, WIFI_SECOND_CHAN_NONE));
+    ESP_ERROR_CHECK(esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE));
 
     // Aktifkan mode promiscuous
     ESP_ERROR_CHECK(esp_wifi_set_promiscuous(true));
@@ -71,7 +72,7 @@ void app_main(void) {
 
     // Baca alamat descriptor awal
     uint32_t last_desc = get_last_dscr();
-    ESP_LOGI(TAG, "Initial last descriptor address: 0x%08x", last_desc);
+    ESP_LOGI(TAG, "Initial last descriptor address: 0x%08" PRIx32, last_desc); // %08x -> %08" PRIx32
 
     // Loop polling
     while (1) {
@@ -81,11 +82,11 @@ void app_main(void) {
             rx_desc_t *desc = (rx_desc_t*)new_desc;
             uint32_t len = desc->status & 0xFFF;   // panjang frame (12 bit)
             if (len > 0 && len < 2048) {           // batas aman
-                ESP_LOGI(TAG, "Frame received, length: %u, buffer: 0x%08x", len, desc->buffer);
+                ESP_LOGI(TAG, "Frame received, length: %" PRIu32 ", buffer: 0x%08" PRIx32, len, desc->buffer);
                 // Tampilkan isi frame dalam hex
                 ESP_LOG_BUFFER_HEX("RAW", (void*)(desc->buffer), len);
             } else {
-                ESP_LOGW(TAG, "Invalid frame length: %u", len);
+                ESP_LOGW(TAG, "Invalid frame length: %" PRIu32, len);
             }
             last_desc = new_desc;
         }
