@@ -4,23 +4,23 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/gpio.h"
+#include "led_strip.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
 #include "soc/soc.h"
-#include "led_strip.h"
 
-// Alamat register untuk akses langsung
+// ==================== Konfigurasi ====================
 #define RX_DESC_LAST_LOW   0x60033090
 #define RX_DESC_LAST_HIGH  0x60033c64
-#define RX_END_STATE       0x600330a8
+#define CHANNEL            5
+#define BOOT_BUTTON_GPIO   0
+#define NEOPIXEL_GPIO      48
+#define LED_BLINK_MS       100
+#define LED_DIM_VALUE      5       // nilai redup (0-255)
 
-// Pin untuk NeoPixel dan tombol boot
-#define NEOPIXEL_PIN       48
-#define BOOT_BUTTON_PIN    0
-
-// Struktur descriptor RX (12 byte) – sesuai inisialisasi driver
+// Struktur descriptor RX (12 byte)
 typedef struct {
     uint32_t status;   // bit 0-11 = panjang frame
     uint32_t buffer;   // alamat buffer data
@@ -28,49 +28,20 @@ typedef struct {
 } rx_desc_t;
 
 static const char *TAG = "RX_MONITOR";
-static uint32_t last_state = 0;
 static led_strip_handle_t led_strip;
+static uint32_t last_desc = 0;
 
-// --- Fungsi akses register ---
+// ==================== Fungsi Hardware ====================
 static uint32_t get_last_dscr(void) {
-    uint32_t low  = READ_PERI_REG(RX_DESC_LAST_LOW);
+    uint32_t low = READ_PERI_REG(RX_DESC_LAST_LOW);
     uint32_t high = READ_PERI_REG(RX_DESC_LAST_HIGH);
-    high &= 0xfff00000;               // hanya 20 bit teratas
+    high &= 0xfff00000;          // hanya 20 bit teratas (sesuai assembly)
     return high | low;
 }
 
-static uint32_t get_rx_end_state(void) {
-    return READ_PERI_REG(RX_END_STATE) & 0xFF;
-}
-
-// --- Inisialisasi NeoPixel ---
-void led_init(void) {
-    led_strip_config_t strip_config = {
-        .strip_gpio_num = NEOPIXEL_PIN,
-        .max_leds = 1,
-    };
-    led_strip_rmt_config_t rmt_config = {
-        .resolution_hz = 10 * 1000 * 1000, // 10 MHz
-    };
-    ESP_ERROR_CHECK(led_strip_new_rmt_device(&strip_config, &rmt_config, &led_strip));
-    led_strip_clear(led_strip);  // matikan LED
-}
-
-void led_set(uint8_t r, uint8_t g, uint8_t b) {
-    led_strip_set_pixel(led_strip, 0, r, g, b);
-    led_strip_refresh(led_strip);
-}
-
-// --- Inisialisasi Wi-Fi dalam mode promiscuous (channel 5) ---
+// ==================== Inisialisasi Wi-Fi ====================
 void wifi_init(void) {
-    // NVS
-    esp_err_t ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        ret = nvs_flash_init();
-    }
-    ESP_ERROR_CHECK(ret);
-
+    ESP_ERROR_CHECK(nvs_flash_init());
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
@@ -80,88 +51,92 @@ void wifi_init(void) {
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_start());
 
-    // Set channel 5
-    ESP_ERROR_CHECK(esp_wifi_set_channel(5, WIFI_SECOND_CHAN_NONE));
-
-    // Aktifkan promiscuous mode
+    ESP_ERROR_CHECK(esp_wifi_set_channel(CHANNEL, WIFI_SECOND_CHAN_NONE));
     ESP_ERROR_CHECK(esp_wifi_set_promiscuous(true));
 
-    // Filter semua frame (data, manajemen, kontrol)
     wifi_promiscuous_filter_t filter = {
         .filter_mask = WIFI_PROMIS_FILTER_MASK_ALL
     };
     esp_wifi_set_promiscuous_filter(&filter);
+
     wifi_promiscuous_filter_t ctrl_filter = {
         .filter_mask = WIFI_PROMIS_CTRL_FILTER_MASK_ALL
     };
     esp_wifi_set_promiscuous_ctrl_filter(&ctrl_filter);
 
-    ESP_LOGI(TAG, "WiFi promiscuous mode aktif di channel 5");
+    ESP_LOGI(TAG, "WiFi promiscuous mode aktif pada channel %d", CHANNEL);
 }
 
-// --- Task untuk tombol boot ---
-void button_task(void *arg) {
-    gpio_set_direction(BOOT_BUTTON_PIN, GPIO_MODE_INPUT);
-    gpio_set_pull_mode(BOOT_BUTTON_PIN, GPIO_PULLUP_ONLY);
-
-    while (1) {
-        if (gpio_get_level(BOOT_BUTTON_PIN) == 0) {
-            vTaskDelay(pdMS_TO_TICKS(50));       // debounce
-            if (gpio_get_level(BOOT_BUTTON_PIN) == 0) {
-                ESP_LOGI(TAG, "Tombol ditekan → set channel 5");
-                esp_wifi_set_channel(5, WIFI_SECOND_CHAN_NONE);
-
-                led_set(0, 10, 0);    // hijau redup
-                vTaskDelay(pdMS_TO_TICKS(100));
-                led_set(0, 0, 0);     // mati
-
-                // tunggu tombol dilepas
-                while (gpio_get_level(BOOT_BUTTON_PIN) == 0) {
-                    vTaskDelay(pdMS_TO_TICKS(10));
-                }
-            }
-        }
-        vTaskDelay(pdMS_TO_TICKS(10));
-    }
+// ==================== Inisialisasi LED NeoPixel ====================
+void led_init(void) {
+    led_strip_config_t strip_config = {
+        .strip_gpio_num = NEOPIXEL_GPIO,
+        .max_leds = 1,
+    };
+    led_strip_rmt_config_t rmt_config = {
+        .resolution_hz = 10 * 1000 * 1000, // 10MHz
+    };
+    ESP_ERROR_CHECK(led_strip_new_rmt_device(&strip_config, &rmt_config, &led_strip));
+    led_strip_clear(led_strip);  // matikan semua LED
 }
 
+void led_blink_dim(void) {
+    // Nyalakan merah redup
+    led_strip_set_pixel(led_strip, 0, LED_DIM_VALUE, 0, 0);
+    led_strip_refresh(led_strip);
+    vTaskDelay(pdMS_TO_TICKS(LED_BLINK_MS));
+    led_strip_clear(led_strip);
+    led_strip_refresh(led_strip);
+}
+
+// ==================== Tombol Boot ====================
+void button_init(void) {
+    gpio_config_t io_conf = {
+        .pin_bit_mask = (1ULL << BOOT_BUTTON_GPIO),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&io_conf);
+}
+
+bool is_button_pressed(void) {
+    return (gpio_get_level(BOOT_BUTTON_GPIO) == 0); // aktif low
+}
+
+// ==================== Aplikasi Utama ====================
 void app_main(void) {
-    // Inisialisasi LED (merah redup sebagai tanda mulai)
     led_init();
-    led_set(10, 0, 0);
-
-    // Inisialisasi Wi-Fi
+    button_init();
     wifi_init();
 
-    // Baca state awal RX
-    last_state = get_rx_end_state();
-    ESP_LOGI(TAG, "RX end state awal: %" PRIu32, last_state);
+    // Baca alamat descriptor awal
+    last_desc = get_last_dscr();
+    ESP_LOGI(TAG, "Initial last descriptor: 0x%08" PRIx32, last_desc);
 
-    // Buat task tombol
-    xTaskCreate(button_task, "button_task", 2048, NULL, 5, NULL);
-
-    // Loop utama polling frame
     while (1) {
-        uint32_t current_state = get_rx_end_state();
-        if (current_state != last_state) {
-            // Ada frame baru
-            uint32_t desc_addr = get_last_dscr();
-            rx_desc_t *desc = (rx_desc_t*)desc_addr;
-            uint32_t len = desc->status & 0xFFF;   // panjang frame (12 bit)
-
-            if (len > 0 && len < 2048) {           // batas aman
-                ESP_LOGI(TAG, "Frame diterima, panjang: %" PRIu32 ", buffer: 0x%08" PRIx32, len, desc->buffer);
-                ESP_LOG_BUFFER_HEX("RAW", (void*)(desc->buffer), len);
-
-                // Kedip biru redup
-                led_set(0, 0, 10);
-                vTaskDelay(pdMS_TO_TICKS(5));
-                led_set(0, 0, 0);
-            } else {
-                ESP_LOGW(TAG, "Panjang frame tidak valid: %" PRIu32, len);
-            }
-            last_state = current_state;
+        // Jika tombol ditekan, reset last_desc untuk memulai ulang deteksi
+        if (is_button_pressed()) {
+            ESP_LOGI(TAG, "Tombol ditekan, reset descriptor");
+            last_desc = get_last_dscr();  // set ke nilai terkini
+            vTaskDelay(pdMS_TO_TICKS(200)); // debounce
         }
-        vTaskDelay(pdMS_TO_TICKS(1));   // polling cepat (1 ms)
+
+        uint32_t new_desc = get_last_dscr();
+        if (new_desc != last_desc) {
+            rx_desc_t *desc = (rx_desc_t*)new_desc;
+            uint32_t len = desc->status & 0xFFF;
+
+            // Validasi panjang frame (minimal header 24 byte, maksimal 1600)
+            if (len >= 24 && len <= 1600) {
+                ESP_LOGI(TAG, "Frame received, len=%" PRIu32 ", buffer=0x%08" PRIx32, len, desc->buffer);
+                ESP_LOG_BUFFER_HEX("RAW", (void*)(desc->buffer), len);
+                led_blink_dim();  // indikasi visual
+            } else {
+                ESP_LOGW(TAG, "Invalid frame length: %" PRIu32, len);
+            }
+            last_desc = new_desc;
+        }
+        vTaskDelay(pdMS_TO_TICKS(5));  // polling cepat
     }
 }
