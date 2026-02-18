@@ -33,6 +33,7 @@ jobs:
         cp build/bootloader/bootloader.bin flash_package/
         cp build/partition_table/partition-table.bin flash_package/
         cp build/*.bin flash_package/ || true
+        cp build/*.elf flash_package/ || true
         cp build/flasher_args.json flash_package/ || true
 
         # README singkat untuk user

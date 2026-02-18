@@ -1,117 +1,37 @@
 #include <stdio.h>
 #include <string.h>
-#include <inttypes.h>                     // untuk PRIu32, PRIx32
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "esp_system.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
+#include "esp_log.h"
 #include "nvs_flash.h"
 #include "soc/soc.h"
-#include "driver/uart.h"
-#include "esp_log.h"
 
-// Alamat register MAC untuk ESP32-S3 (berdasarkan reverse engineering)
-#define MAC_REG_BASE        0x60033000
-#define RX_DESC_START       (MAC_REG_BASE + 0x88)   // Pointer ke descriptor pertama (head)
-#define RX_CUR_DESC         (MAC_REG_BASE + 0x90)   // (opsional) descriptor yang sedang aktif
+// Alamat register untuk mendapatkan descriptor terakhir
+#define RX_DESC_LAST_LOW   0x60033090
+#define RX_DESC_LAST_HIGH  0x60033c64
 
 // Struktur descriptor RX (12 byte)
 typedef struct {
-    uint32_t word0;    // bit 0-11: panjang frame, bit 30: kepemilikan (1=hardware)
-    uint32_t buf_addr; // Alamat buffer tempat frame disimpan
-    uint32_t next;     // Pointer ke descriptor berikutnya (circular)
+    uint32_t status;   // bit 0-11 = panjang frame
+    uint32_t buffer;   // alamat buffer data
+    uint32_t next;     // pointer ke descriptor berikutnya
 } rx_desc_t;
 
-static const char *TAG = "SNIFF_ALL";
+static const char *TAG = "RX_MONITOR";
 
-// MUX untuk critical section
-static portMUX_TYPE my_mux = portMUX_INITIALIZER_UNLOCKED;
+// Membaca alamat descriptor terakhir dari hardware
+static uint32_t get_last_dscr(void) {
+    uint32_t low = READ_PERI_REG(RX_DESC_LAST_LOW);
+    uint32_t high = READ_PERI_REG(RX_DESC_LAST_HIGH);
+    high &= 0xfff00000;          // hanya 20 bit teratas (sesuai assembly)
+    return high | low;
+}
 
 // Inisialisasi Wi-Fi dalam mode promiscuous
-static void wifi_init(void)
-{
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
-
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
-    ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));  // Diperlukan untuk promiscuous
-
-    // Aktifkan filter untuk menerima semua frame (data, manajemen, kontrol)
-    wifi_promiscuous_filter_t filter = {
-        .filter_mask = WIFI_PROMIS_FILTER_MASK_ALL
-    };
-    ESP_ERROR_CHECK(esp_wifi_set_promiscuous_filter(&filter));
-    ESP_ERROR_CHECK(esp_wifi_set_promiscuous(true));    // Mode monitor
-
-    ESP_ERROR_CHECK(esp_wifi_start());
-
-    ESP_LOGI(TAG, "WiFi promiscuous mode started");
-}
-
-// Task pembaca descriptor
-void sniff_task(void *pvParameters)
-{
-    uint32_t head_desc = 0;
-    uint32_t desc_count = 0;
-    uint32_t first_head = 0;
-
-    while (1) {
-        portENTER_CRITICAL(&my_mux);   // Masuk critical section
-
-        head_desc = READ_PERI_REG(RX_DESC_START);
-        if (head_desc && head_desc != first_head) {
-            // Hitung jumlah descriptor dengan mengikuti next hingga kembali ke head
-            first_head = head_desc;
-            desc_count = 0;
-            rx_desc_t *d = (rx_desc_t*)head_desc;
-            do {
-                desc_count++;
-                d = (rx_desc_t*)d->next;
-            } while ((uint32_t)d != head_desc && desc_count < 64); // batas aman
-            ESP_LOGI(TAG, "RX descriptor ring: head=0x%08" PRIx32 ", count=%" PRIu32, head_desc, desc_count);
-        }
-
-        if (head_desc && desc_count > 0) {
-            rx_desc_t *desc = (rx_desc_t*)head_desc;
-            for (int i = 0; i < desc_count; i++) {
-                uint32_t word0 = desc->word0;
-
-                // Bit 30 = 1 berarti frame masih milik hardware (belum diproses driver)
-                if (word0 & (1 << 30)) {
-                    uint32_t len = word0 & 0xFFF;  // 12 bit panjang
-                    if (len > 0 && len < 2048) {   // Batas aman
-                        uint8_t *buf = (uint8_t*)desc->buf_addr;
-
-                        // Salin frame ke buffer lokal (masih dalam critical section)
-                        uint8_t temp[len];
-                        memcpy(temp, buf, len);
-
-                        // Keluar critical sebelum mencetak agar tidak memblokir lama
-                        portEXIT_CRITICAL(&my_mux);
-
-                        // Cetak frame
-                        ESP_LOGI(TAG, "Frame[%d] len=%" PRIu32, i, len);
-                        ESP_LOG_BUFFER_HEX(TAG, temp, (len > 64) ? 64 : len);
-
-                        // Masuk critical lagi untuk lanjut scan descriptor berikutnya
-                        portENTER_CRITICAL(&my_mux);
-                    }
-                }
-                desc = (rx_desc_t*)desc->next;
-            }
-        }
-
-        portEXIT_CRITICAL(&my_mux);
-        vTaskDelay(pdMS_TO_TICKS(10));
-    }
-}
-
-void app_main(void)
-{
-    // Inisialisasi NVS (diperlukan Wi-Fi)
+void wifi_init(void) {
+    // Inisialisasi NVS (diperlukan untuk Wi-Fi)
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
@@ -119,11 +39,56 @@ void app_main(void)
     }
     ESP_ERROR_CHECK(ret);
 
+    ESP_ERROR_CHECK(esp_netif_init());
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+
+    ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));   // mode station agar bisa monitor
+    ESP_ERROR_CHECK(esp_wifi_start());
+
+    // Atur channel (misal channel 1)
+    ESP_ERROR_CHECK(esp_wifi_set_channel(5, WIFI_SECOND_CHAN_NONE));
+
+    // Aktifkan mode promiscuous
+    ESP_ERROR_CHECK(esp_wifi_set_promiscuous(true));
+
+    // Set filter agar menerima semua jenis frame (data, manajemen, kontrol)
+    wifi_promiscuous_filter_t filter = {
+        .filter_mask = WIFI_PROMIS_FILTER_MASK_ALL
+    };
+    esp_wifi_set_promiscuous_filter(&filter);
+    esp_wifi_set_promiscuous_ctrl_filter(WIFI_PROMIS_CTRL_FILTER_MASK_ALL);
+
+    ESP_LOGI(TAG, "WiFi initialized in promiscuous mode on channel 1");
+}
+
+void app_main(void) {
     // Inisialisasi Wi-Fi
     wifi_init();
 
-    // Buat task pembaca
-    xTaskCreate(sniff_task, "sniff_task", 4096, NULL, 5, NULL);
+    // Baca alamat descriptor awal
+    uint32_t last_desc = get_last_dscr();
+    ESP_LOGI(TAG, "Initial last descriptor address: 0x%08x", last_desc);
 
-    ESP_LOGI(TAG, "Sniffer started. Capturing all frames...");
+    // Loop polling
+    while (1) {
+        uint32_t new_desc = get_last_dscr();
+        if (new_desc != last_desc) {
+            // Ada descriptor baru
+            rx_desc_t *desc = (rx_desc_t*)new_desc;
+            uint32_t len = desc->status & 0xFFF;   // panjang frame (12 bit)
+            if (len > 0 && len < 2048) {           // batas aman
+                ESP_LOGI(TAG, "Frame received, length: %u, buffer: 0x%08x", len, desc->buffer);
+                // Tampilkan isi frame dalam hex
+                ESP_LOG_BUFFER_HEX("RAW", (void*)(desc->buffer), len);
+            } else {
+                ESP_LOGW(TAG, "Invalid frame length: %u", len);
+            }
+            last_desc = new_desc;
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));   // polling setiap 10 ms
+    }
 }
