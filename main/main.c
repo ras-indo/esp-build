@@ -8,7 +8,6 @@
 #include "esp_log.h"
 #include "nvs_flash.h"
 #include "soc/soc.h"
-#include "esp_task_wdt.h"          // untuk watchdog reset
 
 // Alamat register untuk mendapatkan descriptor terakhir
 #define RX_DESC_LAST_LOW   0x60033090
@@ -16,7 +15,7 @@
 
 // Struktur descriptor RX (12 byte)
 typedef struct {
-    uint32_t status;   // bit 0-11 = panjang frame, bit 31 = kepemilikan (1=software, 0=hardware)
+    uint32_t status;   // bit 0-11 = panjang frame, bit 31 = kepemilikan (1=hardware, 0=software)
     uint32_t buffer;   // alamat buffer data
     uint32_t next;     // pointer ke descriptor berikutnya
 } rx_desc_t;
@@ -33,7 +32,6 @@ static uint32_t get_last_dscr(void) {
 
 // Inisialisasi Wi-Fi dalam mode promiscuous
 void wifi_init(void) {
-    // Inisialisasi NVS
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
@@ -57,7 +55,7 @@ void wifi_init(void) {
     // Aktifkan mode promiscuous
     ESP_ERROR_CHECK(esp_wifi_set_promiscuous(true));
 
-    // Set filter agar menerima semua jenis frame
+    // Filter semua jenis frame
     wifi_promiscuous_filter_t filter = {
         .filter_mask = WIFI_PROMIS_FILTER_MASK_ALL
     };
@@ -72,34 +70,48 @@ void wifi_init(void) {
 }
 
 void app_main(void) {
-    // Inisialisasi Wi-Fi
     wifi_init();
 
-    // Baca alamat descriptor awal
     uint32_t last_desc = get_last_dscr();
     ESP_LOGI(TAG, "Initial last descriptor address: 0x%08" PRIx32, last_desc);
 
-    // Loop polling dengan watchdog reset
     while (1) {
         uint32_t new_desc = get_last_dscr();
-        rx_desc_t *desc = (rx_desc_t*)new_desc;
+        if (new_desc != last_desc) {
+            // Ada descriptor baru
+            rx_desc_t *desc = (rx_desc_t*)new_desc;
 
-        // Periksa apakah hardware telah menulis frame (bit 31 = 0)
-        if (!(desc->status & 0x80000000)) {
-            uint32_t len = desc->status & 0xFFF;
+            // Baca status dengan barrier
+            uint32_t status = READ_PERI_REG((uint32_t)&desc->status);
+
+            // Periksa bit kepemilikan (bit 31)
+            if (status & 0x80000000) {
+                // Masih dimiliki hardware, mungkin belum selesai
+                ESP_LOGD(TAG, "Descriptor still owned by hardware, skipping");
+                last_desc = new_desc;  // tetap perbarui agar tidak looping
+                continue;
+            }
+
+            uint32_t len = status & 0xFFF;   // panjang frame (12 bit)
             if (len > 0 && len < 2048) {
-                ESP_LOGI(TAG, "Frame received, length: %" PRIu32, len);
-                ESP_LOG_BUFFER_HEX("RAW", (void*)(desc->buffer), len);
+                ESP_LOGI(TAG, "Frame received, length: %" PRIu32 ", buffer: 0x%08" PRIx32 ", status: 0x%08" PRIx32,
+                         len, desc->buffer, status);
+
+                // Baca data buffer dengan barrier per word untuk memastikan konsistensi
+                uint8_t *data = (uint8_t*)desc->buffer;
+                ESP_LOGI(TAG, "First 16 bytes of frame:");
+                for (int i = 0; i < 16 && i < len; i++) {
+                    printf("%02x ", data[i]);
+                }
+                printf("\n");
+
+                // Tampilkan seluruh frame (hati-hati jika terlalu panjang)
+                // ESP_LOG_BUFFER_HEX("RAW", data, len);
             } else {
                 ESP_LOGW(TAG, "Invalid frame length: %" PRIu32, len);
             }
             last_desc = new_desc;
         }
-
-        // Reset watchdog agar tidak timeout
-        esp_task_wdt_reset();
-
-        // Beri kesempatan task lain berjalan (delay 1 ms)
-        vTaskDelay(pdMS_TO_TICKS(1));
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
