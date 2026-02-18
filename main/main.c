@@ -33,7 +33,7 @@ static const char *TAG = "RX_MONITOR";
 static led_strip_handle_t led_strip;
 static uint32_t last_desc = 0;
 
-// State machine untuk sniffer
+// State machine
 typedef enum {
     SNIFF_IDLE,
     SNIFF_ACTIVE,
@@ -44,12 +44,22 @@ static sniff_state_t current_state = SNIFF_IDLE;
 static TimerHandle_t sniff_timer = NULL;
 static bool button_pressed_flag = false;
 
+// Pola deadbeef (little-endian)
+static const uint8_t deadbeef_pattern[4] = {0xef, 0xbe, 0xad, 0xde};
+
 // ==================== Fungsi Hardware ====================
 static uint32_t get_last_dscr(void) {
     uint32_t low = READ_PERI_REG(RX_DESC_LAST_LOW);
     uint32_t high = READ_PERI_REG(RX_DESC_LAST_HIGH);
-    high &= 0xfff00000;          // hanya 20 bit teratas (sesuai assembly)
+    high &= 0xfff00000;          // hanya 20 bit teratas
     return high | low;
+}
+
+// Validasi alamat buffer (kira-kira di rentang DRAM/PSRAM)
+static bool is_valid_buffer_addr(uint32_t addr) {
+    // Rentang umum untuk RAM pada ESP32-S3: 0x3FC00000 - 0x3FF00000 (DRAM) dan 0x3F800000 - 0x3FC00000 (PSRAM)
+    // Sesuaikan dengan kebutuhan
+    return (addr >= 0x3F800000 && addr < 0x40000000);
 }
 
 // ==================== Inisialisasi Wi-Fi ====================
@@ -67,7 +77,6 @@ void wifi_init(void) {
     ESP_ERROR_CHECK(esp_wifi_set_channel(CHANNEL, WIFI_SECOND_CHAN_NONE));
     ESP_ERROR_CHECK(esp_wifi_set_promiscuous(true));
 
-    // Filter semua jenis frame (data, manajemen, kontrol)
     wifi_promiscuous_filter_t filter = {
         .filter_mask = WIFI_PROMIS_FILTER_MASK_ALL
     };
@@ -88,7 +97,7 @@ void led_init(void) {
         .max_leds = 1,
     };
     led_strip_rmt_config_t rmt_config = {
-        .resolution_hz = 10 * 1000 * 1000, // 10 MHz
+        .resolution_hz = 10 * 1000 * 1000,
     };
     ESP_ERROR_CHECK(led_strip_new_rmt_device(&strip_config, &rmt_config, &led_strip));
     led_strip_clear(led_strip);
@@ -126,9 +135,9 @@ void sniff_timer_callback(TimerHandle_t xTimer) {
     ESP_LOGI(TAG, "Sniffing session ended (timeout)");
 }
 
-// ==================== Task untuk menangani button dengan debounce ====================
+// ==================== Task untuk menangani button ====================
 void button_task(void *pvParameter) {
-    bool last_button_state = true;  // pull-up, jadi true = tidak ditekan
+    bool last_button_state = true;
     TickType_t last_debounce_time = 0;
     const TickType_t debounce_delay = pdMS_TO_TICKS(50);
 
@@ -140,15 +149,11 @@ void button_task(void *pvParameter) {
         }
 
         if ((xTaskGetTickCount() - last_debounce_time) > debounce_delay) {
-            if (button_state && current_state == SNIFF_ACTIVE) {
-                // Tombol dilepas saat aktif -> tidak melakukan apa-apa
-            } else if (!button_state && current_state == SNIFF_IDLE) {
+            if (!button_state && current_state == SNIFF_IDLE) {
                 // Tombol ditekan saat idle -> mulai sniffing
                 current_state = SNIFF_ACTIVE;
                 last_desc = get_last_dscr();  // reset descriptor
                 ESP_LOGI(TAG, "Sniffing started! (will run for %d seconds)", SNIFF_DURATION_MS/1000);
-
-                // Start timer untuk mengakhiri sesi
                 xTimerStart(sniff_timer, 0);
             }
         }
@@ -164,18 +169,10 @@ void app_main(void) {
     button_init();
     wifi_init();
 
-    // Buat timer untuk mengakhiri sesi sniffing
     sniff_timer = xTimerCreate("sniff_timer", pdMS_TO_TICKS(SNIFF_DURATION_MS), 
                                 pdFALSE, NULL, sniff_timer_callback);
-
-    // Buat task untuk menangani button
     xTaskCreate(button_task, "button_task", 2048, NULL, 1, NULL);
 
-    // Pola deadbeef dalam little-endian (ef be ad de)
-    uint32_t deadbeef = 0xdeadbeef;
-    uint8_t *deadbeef_bytes = (uint8_t*)&deadbeef;
-
-    // Variabel untuk LED blinking
     TickType_t last_blink = 0;
     bool led_state = false;
 
@@ -183,12 +180,12 @@ void app_main(void) {
 
     while (1) {
         if (current_state == SNIFF_ACTIVE) {
-            // LED blinking selama sesi aktif
+            // LED blinking
             TickType_t now = xTaskGetTickCount();
             if ((now - last_blink) > pdMS_TO_TICKS(LED_BLINK_INTERVAL)) {
                 led_state = !led_state;
                 if (led_state) {
-                    led_set_color(LED_DIM_VALUE, 0, 0);  // merah redup
+                    led_set_color(LED_DIM_VALUE, 0, 0);
                 } else {
                     led_clear();
                 }
@@ -197,28 +194,32 @@ void app_main(void) {
 
             // Sniffing logic
             uint32_t new_desc = get_last_dscr();
-            if (new_desc != last_desc) {
+            if (new_desc != last_desc && new_desc != 0) {
                 rx_desc_t *desc = (rx_desc_t*)new_desc;
-                uint32_t len = desc->status & 0xFFF;   // panjang frame (12 bit)
+                uint32_t len = desc->status & 0xFFF;
                 uint8_t *buf = (uint8_t*)desc->buffer;
 
-                // Periksa apakah buffer masih berisi deadbeef (4 byte pertama)
-                bool is_deadbeef = (buf[0] == deadbeef_bytes[0] &&
-                                    buf[1] == deadbeef_bytes[1] &&
-                                    buf[2] == deadbeef_bytes[2] &&
-                                    buf[3] == deadbeef_bytes[3]);
+                // Validasi dasar
+                bool valid = (len >= 24 && len <= 1600) && 
+                             (desc->buffer != 0) && 
+                             is_valid_buffer_addr(desc->buffer);
 
-                // Validasi panjang frame (minimal 24 byte, maksimal 1600)
-                // Probe request biasanya 50-100 byte, jadi 24 cukup untuk menangkap semua
-                if (len >= 24 && len <= 1600 && !is_deadbeef) {
+                // Periksa deadbeef (4 byte pertama)
+                if (valid && memcmp(buf, deadbeef_pattern, 4) == 0) {
+                    valid = false;  // buffer masih deadbeef
+                }
+
+                if (valid) {
                     ESP_LOGI(TAG, "Frame received, len=%" PRIu32 ", buffer=0x%08" PRIx32, len, desc->buffer);
                     ESP_LOG_BUFFER_HEX("RAW", buf, len);
+                } else {
+                    ESP_LOGD(TAG, "Skipping invalid frame: len=%" PRIu32 ", buffer=0x%08" PRIx32, len, desc->buffer);
                 }
+
                 last_desc = new_desc;
             }
         } else {
-            // LED mati saat idle
-            led_clear();
+            led_clear();  // pastikan LED mati saat idle
         }
 
         vTaskDelay(pdMS_TO_TICKS(5));
