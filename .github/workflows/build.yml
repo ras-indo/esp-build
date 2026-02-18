@@ -40,7 +40,7 @@ jobs:
         ESP32-S3 Flash Package
 
         Contoh flashing:
-        esptool.py --chip esp32s3 -p PORT -b 460800 \\
+        esptool.py --chip esp32s3 -p PORT -b 115200 \\
           --before default_reset --after hard_reset write_flash \\
           0x0 bootloader.bin \\
           0x8000 partition-table.bin \\

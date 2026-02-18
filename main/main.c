@@ -2,68 +2,127 @@
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "esp_system.h"
 #include "esp_wifi.h"
-#include "nvs_flash.h"
-#include "esp_netif.h"
 #include "esp_event.h"
+#include "nvs_flash.h"
+#include "soc/soc.h"
+#include "driver/uart.h"
+#include "esp_log.h"
 
-// Register ESP32-S3 (Open MAC Zeus Logic)
-#define S3_WIFI_RX_CONFIG_REG 0x60033084
-#define S3_WIFI_RX_FILTER_REG 0x60033000
+// Alamat register MAC untuk ESP32-S3 (berdasarkan reverse engineering)
+#define MAC_REG_BASE        0x60033000
+#define RX_DESC_START       (MAC_REG_BASE + 0x88)   // Pointer ke descriptor pertama (head)
+#define RX_CUR_DESC         (MAC_REG_BASE + 0x90)   // (opsional) descriptor yang sedang aktif
 
-// Fungsi ROM untuk output cepat
-extern int ets_printf(const char *fmt, ...);
+// Struktur descriptor RX (12 byte)
+typedef struct {
+    uint32_t word0;    // bit 0-11: panjang frame, bit 30: kepemilikan (1=hardware)
+    uint32_t buf_addr; // Alamat buffer tempat frame disimpan
+    uint32_t next;     // Pointer ke descriptor berikutnya (circular)
+} rx_desc_t;
 
-// Fungsi untuk bypass filter hardware
-void apply_open_mac_hijack() {
-    // Matikan hardware filter (Terima semua alamat MAC)
-    *(volatile uint32_t*)(S3_WIFI_RX_FILTER_REG) = 0;
+static const char *TAG = "SNIFF_ALL";
 
-    // Paksa mesin RX DMA untuk menangkap paket Management & Control
-    *(volatile uint32_t*)(S3_WIFI_RX_CONFIG_REG) |= 0x00000003; 
+// Inisialisasi Wi-Fi dalam mode promiscuous
+static void wifi_init(void)
+{
+    ESP_ERROR_CHECK(esp_netif_init());
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
 
-    ets_printf("\n[SYSTEM] Zeus Open MAC Hijack Applied to S3\n");
-}
-
-// Callback untuk menangkap frame mentah
-void sniffer_handler(void* buf, wifi_promiscuous_pkt_type_t type) {
-    wifi_promiscuous_pkt_t *pkt = (wifi_promiscuous_pkt_t *)buf;
-    uint8_t *payload = pkt->payload;
-    uint32_t len = pkt->rx_ctrl.sig_len;
-
-    // Cetak Raw Frame Header (24 byte pertama)
-    ets_printf("LEN:%d | RSSI:%d | DATA:", len, pkt->rx_ctrl.rssi);
-    for (int i = 0; i < (len > 24 ? 24 : len); i++) {
-        ets_printf(" %02X", payload[i]);
-    }
-    ets_printf("\n");
-}
-
-void app_main(void) {
-    // Inisialisasi dasar
-    nvs_flash_init();
-    esp_netif_init();
-    esp_event_loop_create_default();
-
-    // Inisialisasi WiFi (Menyalakan clock radio)
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    esp_wifi_init(&cfg);
-    esp_wifi_set_storage(WIFI_STORAGE_RAM);
-    esp_wifi_set_mode(WIFI_MODE_NULL); 
-    esp_wifi_start();
+    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+    ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));  // Diperlukan untuk promiscuous
 
-    // Set ke Channel 1 (Bisa diubah sesuai target)
-    esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
+    // Aktifkan filter untuk menerima semua frame (data, manajemen, kontrol)
+    wifi_promiscuous_filter_t filter = {
+        .filter_mask = WIFI_PROMIS_FILTER_MASK_ALL
+    };
+    ESP_ERROR_CHECK(esp_wifi_set_promiscuous_filter(&filter));
+    ESP_ERROR_CHECK(esp_wifi_set_promiscuous(true));    // Mode monitor
 
-    // Aktifkan mode promiscuous bawaan
-    esp_wifi_set_promiscuous(true);
-    esp_wifi_set_promiscuous_rx_cb(&sniffer_handler);
+    ESP_ERROR_CHECK(esp_wifi_start());
 
-    // Terapkan Hijack Register untuk membuka filter yang dikunci blob
-    vTaskDelay(pdMS_TO_TICKS(200));
-    apply_open_mac_hijack();
+    ESP_LOGI(TAG, "WiFi promiscuous mode started");
+}
 
-    while(1) {
-        vTaskDelay(pdMS_TO_TICKS(1000));
+// Task pembaca descriptor
+void sniff_task(void *pvParameters)
+{
+    uint32_t head_desc = 0;
+    uint32_t desc_count = 0;
+    uint32_t first_head = 0;
+
+    while (1) {
+        // Critical section: matikan interupsi agar descriptor tidak berubah saat kita baca
+        taskENTER_CRITICAL();
+
+        head_desc = READ_PERI_REG(RX_DESC_START);
+        if (head_desc && head_desc != first_head) {
+            // Hitung jumlah descriptor dengan mengikuti next hingga kembali ke head
+            first_head = head_desc;
+            desc_count = 0;
+            rx_desc_t *d = (rx_desc_t*)head_desc;
+            do {
+                desc_count++;
+                d = (rx_desc_t*)d->next;
+            } while ((uint32_t)d != head_desc && desc_count < 64); // batas aman
+            ESP_LOGI(TAG, "RX descriptor ring: head=0x%08x, count=%d", head_desc, desc_count);
+        }
+
+        if (head_desc && desc_count > 0) {
+            rx_desc_t *desc = (rx_desc_t*)head_desc;
+            for (int i = 0; i < desc_count; i++) {
+                uint32_t word0 = desc->word0;
+
+                // Bit 30 = 1 berarti frame masih milik hardware (belum diproses driver)
+                if (word0 & (1 << 30)) {
+                    uint32_t len = word0 & 0xFFF;  // 12 bit panjang
+                    if (len > 0 && len < 2048) {   // Batas aman
+                        uint8_t *buf = (uint8_t*)desc->buf_addr;
+
+                        // Salin frame ke buffer lokal (masih dalam critical section)
+                        uint8_t temp[len];
+                        memcpy(temp, buf, len);
+
+                        // Keluar critical sebelum mencetak agar tidak memblokir lama
+                        taskEXIT_CRITICAL();
+
+                        // Cetak frame
+                        ESP_LOGI(TAG, "Frame[%d] len=%d", i, len);
+                        ESP_LOG_BUFFER_HEX(TAG, temp, (len > 64) ? 64 : len);
+
+                        // Masuk critical lagi untuk lanjut scan descriptor berikutnya
+                        taskENTER_CRITICAL();
+                    }
+                }
+                desc = (rx_desc_t*)desc->next;
+            }
+        }
+
+        taskEXIT_CRITICAL();
+
+        // Jeda agar tidak membebani CPU
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
+}
+
+void app_main(void)
+{
+    // Inisialisasi NVS (diperlukan Wi-Fi)
+    esp_err_t ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ret = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(ret);
+
+    // Inisialisasi Wi-Fi
+    wifi_init();
+
+    // Buat task pembaca
+    xTaskCreate(sniff_task, "sniff_task", 4096, NULL, 5, NULL);
+
+    ESP_LOGI(TAG, "Sniffer started. Capturing all frames...");
 }
