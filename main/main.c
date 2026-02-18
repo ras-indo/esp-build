@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <string.h>
+#include <inttypes.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -9,7 +10,6 @@
 #include "esp_log.h"
 #include "nvs_flash.h"
 #include "soc/soc.h"
-#include "soc/rmt_reg.h"
 #include "driver/rmt.h"
 #include "driver/gpio.h"
 
@@ -34,13 +34,13 @@ typedef struct rx_desc_s {
 
 // ==================== RMT untuk NeoPixel ====================
 #define RMT_TX_CHANNEL      RMT_CHANNEL_0
-#define RMT_CLK_DIV         80      // 1us per tick (80MHz / 80 = 1MHz)
-#define T0H_NS              350
-#define T0L_NS              800
-#define T1H_NS              700
-#define T1L_NS              600
+#define RMT_CLK_DIV         4       // 0.05us per tick (80MHz / 4 = 20MHz)
+#define T0H_TICKS           7       // 350ns / 50ns = 7
+#define T0L_TICKS           16      // 800ns / 50ns = 16
+#define T1H_TICKS           14      // 700ns / 50ns = 14
+#define T1L_TICKS           12      // 600ns / 50ns = 12
 
-static rmt_item32_t neo_items[24];  // untuk 24 bit warna
+static rmt_item32_t neo_items[2];  // item untuk bit 0 dan 1
 
 void neo_pixel_init(void) {
     rmt_config_t config = {
@@ -59,22 +59,16 @@ void neo_pixel_init(void) {
     rmt_config(&config);
     rmt_driver_install(config.channel, 0, 0);
 
-    // Siapkan item untuk satu bit (akan diisi saat set warna)
-    int tick_per_us = 80 / RMT_CLK_DIV;  // =1
-    int t0h_ticks = (T0H_NS + 500) / 1000; // konversi ns ke us (pembulatan)
-    int t0l_ticks = (T0L_NS + 500) / 1000;
-    int t1h_ticks = (T1H_NS + 500) / 1000;
-    int t1l_ticks = (T1L_NS + 500) / 1000;
-
-    // Nilai default untuk bit 0 dan 1
-    neo_items[0].duration0 = t0h_ticks;
+    // Item untuk bit 0
+    neo_items[0].duration0 = T0H_TICKS;
     neo_items[0].level0 = 1;
-    neo_items[0].duration1 = t0l_ticks;
+    neo_items[0].duration1 = T0L_TICKS;
     neo_items[0].level1 = 0;
 
-    neo_items[1].duration0 = t1h_ticks;
+    // Item untuk bit 1
+    neo_items[1].duration0 = T1H_TICKS;
     neo_items[1].level0 = 1;
-    neo_items[1].duration1 = t1l_ticks;
+    neo_items[1].duration1 = T1L_TICKS;
     neo_items[1].level1 = 0;
 }
 
@@ -144,13 +138,13 @@ void rx_poll_task(void *arg) {
                         uint8_t type = (fc >> 2) & 0x03;
                         uint8_t subtype = (fc >> 4) & 0x0F;
                         if (type == 0 && subtype == 4) {
-                            ESP_LOGI(TAG, "Probe request captured, len=%d", len);
+                            ESP_LOGI(TAG, "Probe request captured, len=%" PRIu32, len);
                         } else {
-                            ESP_LOGI(TAG, "Frame captured, len=%d", len);
+                            ESP_LOGI(TAG, "Frame captured, len=%" PRIu32, len);
                         }
                         ESP_LOG_BUFFER_HEX(TAG, frame, len < 64 ? len : 64);
 
-                        // Kirim sinyal ke task blink (non-blocking)
+                        // Kirim sinyal ke task blink
                         int dummy = 1;
                         xQueueSend(blink_queue, &dummy, 0);
 
@@ -171,9 +165,9 @@ void rx_poll_task(void *arg) {
                     uint8_t type = (fc >> 2) & 0x03;
                     uint8_t subtype = (fc >> 4) & 0x0F;
                     if (type == 0 && subtype == 4) {
-                        ESP_LOGI(TAG, "Probe request captured, len=%d", len);
+                        ESP_LOGI(TAG, "Probe request captured, len=%" PRIu32, len);
                     } else {
-                        ESP_LOGI(TAG, "Frame captured, len=%d", len);
+                        ESP_LOGI(TAG, "Frame captured, len=%" PRIu32, len);
                     }
                     ESP_LOG_BUFFER_HEX(TAG, frame, len < 64 ? len : 64);
                     int dummy = 1;
