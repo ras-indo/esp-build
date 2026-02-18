@@ -1,6 +1,6 @@
 #include <stdio.h>
 #include <string.h>
-#include <inttypes.h>          // untuk PRIu32
+#include <inttypes.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_wifi.h"
@@ -32,7 +32,7 @@ static uint32_t get_last_dscr(void) {
 
 // Inisialisasi Wi-Fi dalam mode promiscuous
 void wifi_init(void) {
-    // Inisialisasi NVS (diperlukan untuk Wi-Fi)
+    // Inisialisasi NVS
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
@@ -50,7 +50,7 @@ void wifi_init(void) {
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));   // mode station agar bisa monitor
     ESP_ERROR_CHECK(esp_wifi_start());
 
-    // Atur channel (misal channel 1)
+    // Atur channel (misal channel 5)
     ESP_ERROR_CHECK(esp_wifi_set_channel(5, WIFI_SECOND_CHAN_NONE));
 
     // Aktifkan mode promiscuous
@@ -61,7 +61,12 @@ void wifi_init(void) {
         .filter_mask = WIFI_PROMIS_FILTER_MASK_ALL
     };
     esp_wifi_set_promiscuous_filter(&filter);
-    esp_wifi_set_promiscuous_ctrl_filter(WIFI_PROMIS_CTRL_FILTER_MASK_ALL);
+
+    // Filter kontrol juga harus menggunakan struct
+    wifi_promiscuous_filter_t ctrl_filter = {
+        .filter_mask = WIFI_PROMIS_CTRL_FILTER_MASK_ALL
+    };
+    esp_wifi_set_promiscuous_ctrl_filter(&ctrl_filter);
 
     ESP_LOGI(TAG, "WiFi initialized in promiscuous mode on channel 1");
 }
@@ -72,7 +77,7 @@ void app_main(void) {
 
     // Baca alamat descriptor awal
     uint32_t last_desc = get_last_dscr();
-    ESP_LOGI(TAG, "Initial last descriptor address: 0x%08" PRIx32, last_desc); // %08x -> %08" PRIx32
+    ESP_LOGI(TAG, "Initial last descriptor address: 0x%08" PRIx32, last_desc);
 
     // Loop polling
     while (1) {
