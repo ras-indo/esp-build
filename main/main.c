@@ -51,7 +51,7 @@ void wifi_init(void) {
     ESP_ERROR_CHECK(esp_wifi_start());
 
     // Atur channel (misal channel 1)
-    ESP_ERROR_CHECK(esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE));
+    ESP_ERROR_CHECK(esp_wifi_set_channel(5, WIFI_SECOND_CHAN_NONE));
 
     // Aktifkan mode promiscuous
     ESP_ERROR_CHECK(esp_wifi_set_promiscuous(true));
