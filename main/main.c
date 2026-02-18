@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <string.h>
+#include <inttypes.h>                     // untuk PRIu32, PRIx32
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_system.h"
@@ -23,6 +24,9 @@ typedef struct {
 } rx_desc_t;
 
 static const char *TAG = "SNIFF_ALL";
+
+// MUX untuk critical section
+static portMUX_TYPE my_mux = portMUX_INITIALIZER_UNLOCKED;
 
 // Inisialisasi Wi-Fi dalam mode promiscuous
 static void wifi_init(void)
@@ -55,8 +59,7 @@ void sniff_task(void *pvParameters)
     uint32_t first_head = 0;
 
     while (1) {
-        // Critical section: matikan interupsi agar descriptor tidak berubah saat kita baca
-        taskENTER_CRITICAL();
+        portENTER_CRITICAL(&my_mux);   // Masuk critical section
 
         head_desc = READ_PERI_REG(RX_DESC_START);
         if (head_desc && head_desc != first_head) {
@@ -68,7 +71,7 @@ void sniff_task(void *pvParameters)
                 desc_count++;
                 d = (rx_desc_t*)d->next;
             } while ((uint32_t)d != head_desc && desc_count < 64); // batas aman
-            ESP_LOGI(TAG, "RX descriptor ring: head=0x%08x, count=%d", head_desc, desc_count);
+            ESP_LOGI(TAG, "RX descriptor ring: head=0x%08" PRIx32 ", count=%" PRIu32, head_desc, desc_count);
         }
 
         if (head_desc && desc_count > 0) {
@@ -87,23 +90,21 @@ void sniff_task(void *pvParameters)
                         memcpy(temp, buf, len);
 
                         // Keluar critical sebelum mencetak agar tidak memblokir lama
-                        taskEXIT_CRITICAL();
+                        portEXIT_CRITICAL(&my_mux);
 
                         // Cetak frame
-                        ESP_LOGI(TAG, "Frame[%d] len=%d", i, len);
+                        ESP_LOGI(TAG, "Frame[%d] len=%" PRIu32, i, len);
                         ESP_LOG_BUFFER_HEX(TAG, temp, (len > 64) ? 64 : len);
 
                         // Masuk critical lagi untuk lanjut scan descriptor berikutnya
-                        taskENTER_CRITICAL();
+                        portENTER_CRITICAL(&my_mux);
                     }
                 }
                 desc = (rx_desc_t*)desc->next;
             }
         }
 
-        taskEXIT_CRITICAL();
-
-        // Jeda agar tidak membebani CPU
+        portEXIT_CRITICAL(&my_mux);
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
