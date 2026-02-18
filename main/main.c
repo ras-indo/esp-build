@@ -15,7 +15,7 @@
 
 // Struktur descriptor RX (12 byte)
 typedef struct {
-    uint32_t status;   // bit 0-11 = panjang frame
+    uint32_t status;   // bit 0-11 = panjang frame, bit 31 = kepemilikan (1=software, 0=hardware)
     uint32_t buffer;   // alamat buffer data
     uint32_t next;     // pointer ke descriptor berikutnya
 } rx_desc_t;
@@ -50,8 +50,8 @@ void wifi_init(void) {
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));   // mode station agar bisa monitor
     ESP_ERROR_CHECK(esp_wifi_start());
 
-    // Atur channel (misal channel 5)
-    ESP_ERROR_CHECK(esp_wifi_set_channel(5, WIFI_SECOND_CHAN_NONE));
+    // Atur channel (misal channel 1)
+    ESP_ERROR_CHECK(esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE));
 
     // Aktifkan mode promiscuous
     ESP_ERROR_CHECK(esp_wifi_set_promiscuous(true));
@@ -79,15 +79,25 @@ void app_main(void) {
     uint32_t last_desc = get_last_dscr();
     ESP_LOGI(TAG, "Initial last descriptor address: 0x%08" PRIx32, last_desc);
 
-    // Loop polling
+    // Loop polling cepat
     while (1) {
         uint32_t new_desc = get_last_dscr();
+        rx_desc_t *desc = (rx_desc_t*)new_desc;
+
+        // Periksa apakah hardware telah menulis ke descriptor ini
+        // Bit 31 = 1 berarti masih milik software (belum ada frame baru)
+        // Bit 31 = 0 berarti hardware telah mengisi frame
+        if (desc->status & 0x80000000) {
+            // Belum ada frame baru
+            vTaskDelay(pdMS_TO_TICKS(1));
+            continue;
+        }
+
+        // Jika alamat descriptor berubah atau ada frame baru
         if (new_desc != last_desc) {
-            // Ada descriptor baru
-            rx_desc_t *desc = (rx_desc_t*)new_desc;
             uint32_t len = desc->status & 0xFFF;   // panjang frame (12 bit)
             if (len > 0 && len < 2048) {           // batas aman
-                ESP_LOGI(TAG, "Frame received, length: %" PRIu32 ", buffer: 0x%08" PRIx32, len, desc->buffer);
+                ESP_LOGI(TAG, "Frame received, length: %" PRIu32, len);
                 // Tampilkan isi frame dalam hex
                 ESP_LOG_BUFFER_HEX("RAW", (void*)(desc->buffer), len);
             } else {
@@ -95,6 +105,6 @@ void app_main(void) {
             }
             last_desc = new_desc;
         }
-        vTaskDelay(pdMS_TO_TICKS(10));   // polling setiap 10 ms
+        vTaskDelay(pdMS_TO_TICKS(1));   // polling setiap 1 ms
     }
 }
