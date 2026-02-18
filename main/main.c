@@ -107,6 +107,7 @@ void button_init(void) {
         .pin_bit_mask = (1ULL << BOOT_BUTTON_GPIO),
         .mode = GPIO_MODE_INPUT,
         .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .intr_type = GPIO_INTR_DISABLE,
     };
     gpio_config(&io_conf);
@@ -129,6 +130,8 @@ void button_task(void *pvParameter) {
     TickType_t last_debounce_time = 0;
     const TickType_t debounce_delay = pdMS_TO_TICKS(50);
 
+    ESP_LOGI(TAG, "Button task started, monitoring GPIO%d", BOOT_BUTTON_GPIO);
+
     while (1) {
         bool button_state = is_button_pressed(); // 0 jika ditekan
 
@@ -140,11 +143,14 @@ void button_task(void *pvParameter) {
             // State stabil
             if (button_state == 0 && last_button_state == 1) {
                 // Falling edge: tombol baru ditekan
+                ESP_LOGI(TAG, "Button pressed detected!");
                 if (current_state == SNIFF_IDLE) {
                     current_state = SNIFF_ACTIVE;
                     last_desc = get_last_dscr();  // reset descriptor
                     ESP_LOGI(TAG, "Sniffing started! (will run for %d seconds)", SNIFF_DURATION_MS/1000);
                     xTimerStart(sniff_timer, 0);
+                } else {
+                    ESP_LOGI(TAG, "Sniffing already active, ignoring button");
                 }
             }
         }
@@ -163,9 +169,17 @@ void app_main(void) {
     // Buat timer untuk mengakhiri sesi sniffing
     sniff_timer = xTimerCreate("sniff_timer", pdMS_TO_TICKS(SNIFF_DURATION_MS), 
                                 pdFALSE, NULL, sniff_timer_callback);
+    if (sniff_timer == NULL) {
+        ESP_LOGE(TAG, "Failed to create timer");
+        return;
+    }
 
     // Buat task untuk menangani button
-    xTaskCreate(button_task, "button_task", 2048, NULL, 1, NULL);
+    BaseType_t res = xTaskCreate(button_task, "button_task", 4096, NULL, 1, NULL);
+    if (res != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create button task");
+        return;
+    }
 
     // Pola deadbeef dalam little-endian (ef be ad de)
     uint32_t deadbeef = 0xdeadbeef;
