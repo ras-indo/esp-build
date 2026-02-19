@@ -139,13 +139,20 @@ void rx_poll_task(void *arg) {
 
     while (1) {
         uint32_t current = get_rx_last();
-        if (current != last_addr && is_valid_addr(current)) {
+        if (current != last_addr) {
+            if (!is_valid_addr(current)) {
+                ESP_LOGE(TAG, "Alamat current tidak valid: 0x%08" PRIx32, current);
+                vTaskDelay(5);
+                continue;
+            }
             // Telusuri dari last->next hingga current
             rx_desc_t *desc = last_desc->next;
             int count = 0;
             while (desc != NULL && (uint32_t)desc != current && count < 32) {
-                if (!is_valid_addr((uint32_t)desc)) break;
-
+                if (!is_valid_addr((uint32_t)desc)) {
+                    ESP_LOGE(TAG, "Descriptor tidak valid: 0x%08" PRIx32, (uint32_t)desc);
+                    break;
+                }
                 uint32_t status = desc->status;
                 if (!(status & 0x80000000)) {  // milik software
                     uint32_t len = status & 0xfff;
@@ -173,6 +180,8 @@ void rx_poll_task(void *arg) {
                 }
                 desc = desc->next;
                 count++;
+                // Beri kesempatan task lain jika banyak frame
+                if (count % 8 == 0) taskYIELD();
             }
             // Proses descriptor terakhir
             if (desc != NULL && (uint32_t)desc == current) {
@@ -202,7 +211,7 @@ void rx_poll_task(void *arg) {
             last_addr = current;
             last_desc = (rx_desc_t*)current;
         }
-        vTaskDelay(pdMS_TO_TICKS(5));  // polling setiap 5ms
+        vTaskDelay(5);  // polling setiap 5 ms (pastikan tick rate 1000 Hz)
     }
 }
 
